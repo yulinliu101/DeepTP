@@ -1,0 +1,3 @@
+if (paramId==131 || paramId==132){
+    write "wdata_[dataDate]_[dataTime]_[shortName].grb[edition]";
+}

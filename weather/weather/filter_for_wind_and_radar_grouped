@@ -1,0 +1,3 @@
+if (paramId==131 || paramId==132 || paramId ==129212){
+    write "/home/liuyulin101/Desktop/Wind_Mining/DATA/filtered_weather_data/temp.grb";
+}
