@@ -2,13 +2,15 @@
 # @Author: liuyulin
 # @Date:   2018-08-16 14:51:38
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-08-16 16:56:56
+# @Last Modified time: 2018-08-16 17:23:10
 
 # api functions that are mostly called by other paks
 
 # Trajectory dimension reduction algo.
 import numpy as np
-
+import pandas as pd
+from pyproj import Geod
+g=Geod(ellps='WGS84')
 # reference:
 # http://hanj.cs.illinois.edu/pdf/sigmod07_jglee.pdf
 # Lee, Han and Whang (2007) trajectory clustering a partition-and-group framework
@@ -121,3 +123,71 @@ def GetCharaPnt(Traj,alpha, dist = lambda a, b: np.sqrt(sum((a - b)**2))):
             Length += 1
     CP.append(Traj[-1])
     return np.array(CP)
+
+def plot_fp_act(FP_ID, IAH_BOS_FP_utilize, IAH_BOS_ACT_track, IAH_BOS_FP_track):
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.basemap import Basemap
+    """
+    test code:
+    _, _ = plot_fp_act('FP_00001', flight_plans_util, downsamp_flight_tracks, downsamp_flight_plans)
+    """
+    fig = plt.figure(figsize=(8,6))
+    m = Basemap(llcrnrlon = -100,llcrnrlat = 27,urcrnrlon = -68,urcrnrlat = 46,projection='merc')
+    m.bluemarble()
+    m.drawcoastlines(linewidth=0.5)
+    m.drawcountries(linewidth=0.5)
+    m.drawstates(linewidth=0.5)
+    m.drawparallels(np.arange(10.,35.,5.))
+    m.drawmeridians(np.arange(-120.,-80.,10.))
+
+    fid_fp1 = IAH_BOS_FP_utilize.loc[IAH_BOS_FP_utilize.FLT_PLAN_ID == FP_ID, 'FID'].values
+    print('%d flights filed flight plan %s'%(fid_fp1.shape[0], FP_ID))
+    plot_track = IAH_BOS_ACT_track.loc[IAH_BOS_ACT_track.FID.isin(fid_fp1)]
+    plot_fp = IAH_BOS_FP_track.loc[IAH_BOS_FP_track.FLT_PLAN_ID == FP_ID]
+    x_fp, y_fp = m(plot_fp.LONGITUDE.values, plot_fp.LATITUDE.values)
+
+    for gpidx, gp in plot_track.groupby('FID'):
+        x,y = m(gp.Lon.values, gp.Lat.values)
+        actual, = plt.plot(x,y,'-o', linewidth = 0.1, ms = 1, color='y', label = 'Actual Tracks')
+    fp, = plt.plot(x_fp, y_fp, '-o', linewidth = 2, ms = 5, color='r', label = 'Flight Plans', zorder = 999)
+    plt.show()
+    return plot_track, plot_fp
+
+def preprocess_track_data(path_to_fp,
+                          path_to_fp_util,
+                          path_to_track,
+                          downsamp_rate_ft = 2,
+                          downsamp_rate_fp = 1.025):
+
+    """
+    test code:
+    downsamp_flight_tracks, downsamp_flight_plans = preprocess_track_data(path_to_fp = '../../DATA/DeepTPdata/cleaned_FP_tracks.CSV',
+                                                                       path_to_fp_util = '../../DATA/DeepTPdata/IAH_BOS_Act_Flt_Trk_20130101_1231.CSV',
+                                                                       path_to_track = '../../DATA/DeepTPdata/New_IAHBOS2013.csv',
+                                                                       downsamp_rate_ft = 2,
+                                                                       downsamp_rate_fp = 1.05)
+    """
+    flight_plans = pd.read_csv(path_to_fp)
+    flight_plans_util = pd.read_csv(path_to_fp_util)
+    flight_tracks = pd.read_csv(path_to_track, parse_dates=[6])
+    tmp_ft_head = flight_tracks.groupby('FID').head(1)
+    tmp_ft_tail = flight_tracks.groupby('FID').tail(1)
+    tmp_ft = flight_tracks.loc[flight_tracks.index.difference(tmp_ft_head.index)[::downsamp_rate_ft]]
+    downsamp_flight_tracks = pd.concat([tmp_ft_head, tmp_ft_tail, tmp_ft])
+#     del tmp_ft
+#     del tmp_ft_head
+#     del tmp_ft_tail
+    downsamp_flight_tracks.sort_index(inplace=True)
+    downsamp_flight_tracks = downsamp_flight_tracks.reset_index(drop = True)
+    downsamp_flight_tracks['DT'] = downsamp_flight_tracks.groupby('FID')['Elap_Time'].apply(lambda x: (x - x.shift(1)).dt.seconds)
+    downsamp_flight_tracks['DT'] = downsamp_flight_tracks['DT'].fillna(0)
+    
+    downsamp_flight_plans = []
+    for gpidx, gp in flight_plans.groupby('FLT_PLAN_ID'):
+        tmp_fp_cp = GetCharaPnt(gp[['LONGITUDE', 'LATITUDE']].values, alpha=downsamp_rate_fp,dist = lambda a, b: g.inv(a[0], a[1], b[0], b[1])[2]/1000)
+        tmp_fp_cp = pd.DataFrame(data = tmp_fp_cp, columns=['LONGITUDE', 'LATITUDE'])
+        tmp_fp_cp['FLT_PLAN_ID'] = gpidx
+        downsamp_flight_plans.append(tmp_fp_cp)
+    downsamp_flight_plans = pd.concat(downsamp_flight_plans).reset_index(drop = True)
+    return downsamp_flight_tracks, downsamp_flight_plans
+
