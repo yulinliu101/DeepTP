@@ -17,8 +17,8 @@ import numpy as np
 import zipfile
 
 # path1 = '/media/liuyulin101/YulinLiu/WindData'
-path1 = '/home/liuyulin/Desktop/filtered_weather_data/namanl/'
-path2 = '/home/liuyulin/Desktop/WindFeature/'
+path1 = '/home/liuyulin/Desktop/DATA/filtered_weather_data/namanl/'
+# path2 = '/home/liuyulin/Desktop/WindFeature/'
 
 
 class GetWindSpeed:
