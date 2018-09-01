@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-16 14:51:38
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-08-28 18:27:42
+# @Last Modified time: 2018-08-31 15:51:20
 
 # api functions that are mostly called by other paks
 
@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from pyproj import Geod
 from dateutil import parser
+import matplotlib.pyplot as plt
+from mpl_toolkits.basemap import Basemap
 
 global baseline_time
 baseline_time = parser.parse('01/01/2013 0:0:0')
@@ -22,9 +24,25 @@ g=Geod(ellps='WGS84')
 
 ### Legacy code
 ### legacy code usually has non-pythonic naming convention
+
+# Returns pressure from altitude (ft)
+def press(alt):
+    z = alt/3.28084
+    return 1013.25*(1-(0.0065*z)/288.15)**5.255
+
+# Returns the closest lvl from levels with altitude (atl)
+def proxilvl(alt , lvls):
+    p = press(alt)
+    levels = np.array(sorted(lvls.keys()))
+    return levels[np.abs(levels - p).argmin()]
+
+
 def GetAzimuth(flight_track_df, 
-               last_pnt = 0.0):
+               last_pnt = 1e-6, 
+               canonical = False):
     # return azimuth in degrees
+    # azimuth is from the North: if to the right then positive, if to the left then negative
+    # if want to switch to canonical form, then return (90 - azimuth)
     CenterTraj = flight_track_df[['FID', 'Lat', 'Lon']]
     CenterTraj['azimuth'] = last_pnt
     tmp_df = CenterTraj.shift(-1)
@@ -33,9 +51,13 @@ def GetAzimuth(flight_track_df,
                         CenterTraj.Lat.values[:-1], 
                         tmp_df.Lon.values[:-1], 
                         tmp_df.Lat.values[:-1])[0]
-
-    CenterTraj.iloc[:-1]['azimuth'] = azimuth_arr
+    if canonical:
+        CenterTraj.iloc[:-1]['azimuth'] = (90 - azimuth_arr)
+    else:
+        CenterTraj.iloc[:-1]['azimuth'] = azimuth_arr
+    
     CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].tail(1).index, 'azimuth'] = last_pnt
+    
     return CenterTraj.azimuth
 
 def ReshapeTrajLine(Traj):
@@ -175,7 +197,7 @@ def downsample_track_data(path_to_fp,
     flight_tracks = pd.read_csv(path_to_track, parse_dates=[6])
     tmp_ft_head = flight_tracks.groupby('FID').head(1)
     tmp_ft_tail = flight_tracks.groupby('FID').tail(1)
-    tmp_ft = flight_tracks.loc[flight_tracks.index.difference(tmp_ft_head.index)[::downsamp_rate_ft]]
+    tmp_ft = flight_tracks.loc[flight_tracks.index.difference(tmp_ft_head.index).difference(tmp_ft_tail.index)[::downsamp_rate_ft]]
     downsamp_flight_tracks = pd.concat([tmp_ft_head, tmp_ft_tail, tmp_ft])
 #     del tmp_ft
 #     del tmp_ft_head
@@ -198,11 +220,16 @@ def downsample_track_data(path_to_fp,
 #################################################################################
 
 def rotate_coord(old_coord, theta):
-    rotation_matrix = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+    """
+    IMPORTANT NOTE:
+    theta could either be a single angle or an array with degree, NOT radian;
+    theta should be angle rotating from x-axis!!!
+    """
+    rotation_matrix = np.array([np.cos(theta), -np.sin(theta), np.sin(theta), np.cos(theta)]).T.reshape(-1, 2, 2)
     new_coord = rotation_matrix.dot(old_coord)
     return new_coord
     
-def create_grid(center_x, center_y, shift_xleft, shift_xright, shift_yup, shift_ydown, nx, ny, theta):
+def create_grid_orient(shift_xleft, shift_xright, shift_yup, shift_ydown, nx, ny, theta):
     """
     rotate_grid = create_grid(center_x = -95, 
                         center_y = 30, 
@@ -219,27 +246,32 @@ def create_grid(center_x, center_y, shift_xleft, shift_xright, shift_yup, shift_
     y = np.linspace(0 - shift_ydown, 0 + shift_yup, ny)
     xv, yv = np.meshgrid(x, y, sparse = False)
     grid_2d = np.vstack((xv.flatten(),yv.flatten()))
-    rotate_grid = rotate_coord(grid_2d, theta).T + np.array([[center_x, center_y]])
+    rotate_grid = rotate_coord(grid_2d, theta)
+    # .T + np.array([[center_x, center_y]])
     # [Lon, Lat]
-    return rotate_grid
+    return np.transpose(rotate_grid, [0, 2, 1]) # shape of [M_point (theta.shape[0]), N_grid (i.e., nx * ny), 2]
 
-
-
-def plot_fp_act(FP_ID, IAH_BOS_FP_utilize, IAH_BOS_ACT_track, IAH_BOS_FP_track):
-    import matplotlib.pyplot as plt
-    from mpl_toolkits.basemap import Basemap
-    """
-    test code:
-    _, _ = plot_fp_act('FP_00001', flight_plans_util, downsamp_flight_tracks, downsamp_flight_plans)
-    """
-    fig = plt.figure(figsize=(8,6))
-    m = Basemap(llcrnrlon = -100,llcrnrlat = 27,urcrnrlon = -68,urcrnrlat = 46,projection='merc')
-    m.bluemarble()
+def create_basemap(llon = -100, 
+                   rlon = -68, 
+                   tlat = 46, 
+                   blat = 27, 
+                   figsize = (8,6)):
+    fig = plt.figure(figsize = figsize)
+    m = Basemap(llcrnrlon = llon,llcrnrlat = blat,urcrnrlon = rlon, urcrnrlat = tlat,projection='merc')
+    m.fillcontinents(color='#c5c5c5', lake_color='#8aeaff')
     m.drawcoastlines(linewidth=0.5)
     m.drawcountries(linewidth=0.5)
     m.drawstates(linewidth=0.5)
     m.drawparallels(np.arange(10.,35.,5.))
     m.drawmeridians(np.arange(-120.,-80.,10.))
+    return fig, m
+
+def plot_fp_act(FP_ID, IAH_BOS_FP_utilize, IAH_BOS_ACT_track, IAH_BOS_FP_track):
+    """
+    test code:
+    _, _ = plot_fp_act('FP_00001', flight_plans_util, downsamp_flight_tracks, downsamp_flight_plans)
+    """
+    fig, m = create_basemap()
 
     fid_fp1 = IAH_BOS_FP_utilize.loc[IAH_BOS_FP_utilize.FLT_PLAN_ID == FP_ID, 'FID'].values
     print('%d flights filed flight plan %s'%(fid_fp1.shape[0], FP_ID))
@@ -249,7 +281,20 @@ def plot_fp_act(FP_ID, IAH_BOS_FP_utilize, IAH_BOS_ACT_track, IAH_BOS_FP_track):
 
     for gpidx, gp in plot_track.groupby('FID'):
         x,y = m(gp.Lon.values, gp.Lat.values)
-        actual, = plt.plot(x,y,'-o', linewidth = 0.1, ms = 1, color='y', label = 'Actual Tracks')
+        actual, = plt.plot(x,y,'-o', linewidth = 0.1, ms = 1, color='b', label = 'Actual Tracks')
     fp, = plt.plot(x_fp, y_fp, '-o', linewidth = 2, ms = 5, color='r', label = 'Flight Plans', zorder = 999)
     plt.show()
     return plot_track, plot_fp
+
+def plot_feature_grid(feature_grid_arr, flight_tracks_arr = None):
+    # feature_grid_arr should be np array with shape [None, 400, 2]
+    # the first dimension should be lon and second should be lat
+    fig, m = create_basemap()
+    xgrid, ygrid = m(feature_grid_arr[..., 0], feature_grid_arr[..., 1])
+    if flight_tracks_arr is not None:
+        xtrack, y_track = m(flight_tracks_arr[..., 0], flight_tracks_arr[..., 1])
+        _ = plt.plot(xtrack, y_track, 'o-', ms = 5, color = 'b')
+
+    _ = plt.plot(xgrid, ygrid, 'o', ms = 0.1, color = 'r')
+    
+    return
