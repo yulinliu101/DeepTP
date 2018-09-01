@@ -25,7 +25,7 @@ def proxilvl(alt , lvls):
     levels = np.array(sorted(lvls.keys()))
     return levels[np.abs(levels - p).argmin()]
     
-#    def proxy(val, lvl1, lvl2):
+# def proxy(val, lvl1, lvl2):
 #        if (abs(val - lvl1) < abs(val - lvl2)):
 #            return lvl1
 #        else:
@@ -38,5 +38,5 @@ def proxilvl(alt , lvls):
 #        for i, el in enumerate(levels[1:]):
 #            if p < el:
 #                return proxy(p, levels[i-1], el)
-#
+
 #        return levels[-1]

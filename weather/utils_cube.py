@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-17 15:17:56
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-08-28 16:16:24
+# @Last Modified time: 2018-08-31 15:52:26
 
 import numpy as np
 from mpl_toolkits.basemap import Basemap
@@ -11,7 +11,7 @@ import matplotlib.patches as plt_patch
 from descartes.patch import PolygonPatch
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, MultiPoint
 
-def plot_daily_wx(nested_polygon_list):
+def plot_daily_wx(nested_polygon_list, **kwargs):
     plt.figure(figsize=(10,6))
     m = Basemap(llcrnrlon = -128,llcrnrlat = 22.,urcrnrlon = -63,urcrnrlat = 52,projection='merc')
     m.drawmapboundary(fill_color='#8aeaff')
@@ -20,6 +20,21 @@ def plot_daily_wx(nested_polygon_list):
     m.drawcoastlines(linewidth=0.5)
     m.drawcountries(linewidth=0.5)
     m.drawstates(linewidth=0.1)
+
+
+    feature_grid = kwargs.get('feature_grid', None)
+    flight_tracks_arr = kwargs.get('flight_tracks_arr', None)
+    if feature_grid is None:
+        pass
+    else:
+        xgrid, ygrid = m(feature_grid[..., 0], feature_grid[..., 1])
+        _ = plt.plot(xgrid, ygrid, 'o', ms = 0.1, color = 'r')
+
+    if flight_tracks_arr is None:
+        pass
+    else:
+        xtrack, y_track = m(flight_tracks_arr[..., 0], flight_tracks_arr[..., 1])
+        _ = plt.plot(xtrack, y_track, 'o-', ms = 5, color = 'b')
     
     bad_poly = []
     i = -1

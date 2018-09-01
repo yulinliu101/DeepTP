@@ -1,0 +1,49 @@
+﻿/*SELECT * FROM spatial_ref_sys WHERE srid = 9802;
+SELECT 
+fname AS fname,
+rid AS rid_val,
+ST_Value(rast, 2, (ST_Transform(st_GeomFromText('POINT(-65.08626455 14.33355369)', 4326), 9802))) AS value,
+ST_NearestValue(rast, 2, (ST_Transform(st_GeomFromText('POINT(-65.08626455 14.33355369)', 4326), 9802))) AS nearest_val
+FROM grib_test
+WHERE
+rid = 2
+;
+
+SELECT 
+fname AS fname,
+rid AS rid_val,
+ST_NearestValue(rast, 2, 
+	(ST_Transform
+		(ST_GeomFromText('LINESTRING(-71.160281 42.258729,-71.160837 42.259113,-71.161144 42.25932)',4326), 9802))) 
+			AS nearest_val
+FROM grib_test
+WHERE rid = 2
+;
+*/
+SELECT
+	foo.fname as fname,
+	foo.rid as rid,
+	foo.gid as gid,
+	ST_AsText(ST_Transform((foo.geomval).geom, 4326)) As geomwkt,
+	(foo.geomval).val AS foo_geomval
+FROM (
+	SELECT
+		A.fname,
+		A.rid,
+		g.gid,
+		ST_Intersection(A.rast, 2, g.geom) As geomval
+	FROM grib_test AS A
+
+	CROSS JOIN(
+		VALUES 
+			(1, ST_Transform(ST_GeomFromText('LINESTRING(-90 25,-89 25,-88 25)', 4326), 9802)),
+			(2, ST_Transform(ST_GeomFromText('LINESTRING(-72 43,-72 44,-72 45)', 4326), 9802)),
+			(3, ST_Transform(ST_GeomFromText('POINT(-100 45)', 4326), 9802)))
+	AS g(gid, geom)
+	WHERE A.rid = 2
+) As foo;
+
+
+
+
+
