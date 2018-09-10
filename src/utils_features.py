@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-27 21:41:43
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-08-31 15:30:47
+# @Last Modified time: 2018-09-06 15:42:55
 
 import os
 import numpy as np
@@ -159,8 +159,10 @@ class flight_track_feature_generator:
         flight_tracks.loc[:, 'Elap_Time_Diff'] = flight_tracks.Elap_Time.apply(lambda x: (x - baseline_time).total_seconds())
         query_body = flight_tracks['Elap_Time_Diff'].values
 
-        print('================ decode azimuth (in radians) and altitude info =================')
-        flight_tracks.loc[:, 'azimuth'] = GetAzimuth(flight_tracks) * np.pi/180
+        print('================ decode azimuth (back and forward, in radians) and altitude info =================')
+        flight_tracks.loc[:, 'azimuth'] = GetAzimuth(flight_tracks, course = False) * np.pi/180
+        # azimuth is used to generate oriented feature cubes and corresponding grids
+        flight_tracks.loc[:, 'course'] = GetAzimuth(flight_tracks) * np.pi/180
         flight_tracks.loc[:, 'levels'] = flight_tracks['Alt'].apply(lambda x: proxilvl(x*100, self.lvls_dict))
         flight_tracks.loc[:, 'wx_alt'] = flight_tracks['Alt']//10
         

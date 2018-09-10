@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-16 14:51:38
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-08-31 15:51:20
+# @Last Modified time: 2018-09-06 15:44:40
 
 # api functions that are mostly called by other paks
 
@@ -38,25 +38,38 @@ def proxilvl(alt , lvls):
 
 
 def GetAzimuth(flight_track_df, 
+               course = True,
                last_pnt = 1e-6, 
                canonical = False):
     # return azimuth in degrees
     # azimuth is from the North: if to the right then positive, if to the left then negative
-    # if want to switch to canonical form, then return (90 - azimuth)
+    # if want to switch to canonical form (rotation from the x-axis), then return (90 - azimuth)
+    # if want course (azimuth to the next point), then specify course = True;
+    # otherwise this function will return azimuth from last point
+
     CenterTraj = flight_track_df[['FID', 'Lat', 'Lon']]
     CenterTraj['azimuth'] = last_pnt
     tmp_df = CenterTraj.shift(-1)
-
     azimuth_arr = g.inv(CenterTraj.Lon.values[:-1], 
                         CenterTraj.Lat.values[:-1], 
                         tmp_df.Lon.values[:-1], 
                         tmp_df.Lat.values[:-1])[0]
+
     if canonical:
-        CenterTraj.iloc[:-1]['azimuth'] = (90 - azimuth_arr)
+        if course:
+            CenterTraj.iloc[:-1]['azimuth'] = (90 - azimuth_arr)
+        else:
+            CenterTraj.iloc[1:]['azimuth'] = (90 - azimuth_arr)
     else:
-        CenterTraj.iloc[:-1]['azimuth'] = azimuth_arr
+        if course:
+            CenterTraj.iloc[:-1]['azimuth'] = azimuth_arr
+        else:
+            CenterTraj.iloc[1:]['azimuth'] = azimuth_arr
     
-    CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].tail(1).index, 'azimuth'] = last_pnt
+    if course:
+        CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].tail(1).index, 'azimuth'] = last_pnt
+    else:
+        CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].head(1).index, 'azimuth'] = last_pnt
     
     return CenterTraj.azimuth
 

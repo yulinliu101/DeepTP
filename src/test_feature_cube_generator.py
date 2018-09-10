@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-31 10:35:27
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-08-31 17:21:39
+# @Last Modified time: 2018-09-06 18:11:21
 
 from utils_features import flight_track_feature_generator
 from utils import plot_fp_act, rotate_coord, plot_feature_grid
@@ -32,7 +32,7 @@ print('Downsamping checked!')
 
 # azimuth
 processed_flight_tracks = test_ffclass.flight_track_preprocess(test_ffclass.downsamp_flight_tracks)
-assert np.less_equal(processed_flight_tracks.groupby('FID').tail(1).azimuth.unique(), np.array([1e6]))
+assert np.less_equal(processed_flight_tracks.groupby('FID').head(1).azimuth.unique(), np.array([1e6]))
 print('Azimuth checked!')
 
 # feature grid
@@ -88,6 +88,7 @@ print('visual inspection on ncwf weather polygons')
 ncwf_wx = pickle.load(open('../../DATA/NCWF/processed_bundle/storm_bundle_merge.pkl', 'rb'))
 ## weather should be good
 idx = 51134
+print(feature_grid[idx].shape)
 tmp_dt = processed_flight_tracks.loc[idx, 'wx_fname']
 print(str(tmp_dt))
 tmp_wx_idx = ncwf_wx[2].index([tmp_dt.year, tmp_dt.month, tmp_dt.day, tmp_dt.hour])
