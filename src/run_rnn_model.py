@@ -47,12 +47,13 @@ class trainRNN:
             self.tf_device = '/cpu:0'
         logging.info('Using device %s for main computations', self.tf_device)
         
-        self.cpu_dataset = DatasetEncoderDecoder(actual_track_datapath = '../data/New_IAHBOS2013.csv',
-                                                 flight_plan_datapath = '../data/cleaned_FP_tracks.CSV',
-                                                 flight_plan_utilize_datapath = '../data/IAH_BOS_Act_Flt_Trk_20130101_1231.CSV',
+        self.cpu_dataset = DatasetEncoderDecoder(actual_track_datapath = '../../DATA/DeepTP/processed_flight_tracks.csv',
+                                                 flight_plan_datapath = '../../DATA/DeepTP/processed_flight_plans.csv',
+                                                 flight_plan_utilize_datapath = '../../DATA/DeepTP/IAH_BOS_Act_Flt_Trk_20130101_1231.CSV',
+                                                 feature_cubes_datapath = '../../DATA/DeepTP/feature_cubes.npz',
                                                  shuffle_or_not = True,
                                                  split = True,
-                                                 batch_size = self.batch_size,
+                                                 batch_size = 256,
                                                  dep_lat = 29.98333333,
                                                  dep_lon = -95.33333333)
 
@@ -70,6 +71,8 @@ class trainRNN:
         logger.debug('self.epochs = %d', self.epochs)
         # number of feature length
         self.n_input = parser.getint(config_header, 'n_input')
+        self.n_channels = parser.getint('convolution', 'n_channels')
+        self.n_controled_var = parser.getint('lstm', 'n_controled_var')
         self.n_encode = parser.getint(config_header, 'n_encode')
         self.state_size = parser.getint('lstm', 'n_cell_dim')
         self.n_layer = parser.getint('lstm', 'n_lstm_layers')
@@ -238,11 +241,11 @@ class trainRNN:
 
     def define_placeholder(self):
         # define placeholder
-        targetLength = 4
+        # targetLength = self.n_controled_var
         self.input_encode_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_encode], name = 'encode_tensor')
         self.seq_len_encode = tf.placeholder(dtype = tf.int32, shape = [None], name = 'seq_length_encode')
-        self.input_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_input], name = 'decode_feature_map')
-        self.target = tf.placeholder(dtype = tf.float32, shape = [None, None, targetLength], name = 'target')
+        self.input_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_input, self.n_input, self.n_channels], name = 'decode_feature_map')
+        self.target = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_controled_var], name = 'target')
         self.seq_length = tf.placeholder(dtype = tf.int32, shape = [None], name = 'seq_length_decode')
 
     def launchGraph(self):
@@ -319,8 +322,8 @@ class trainRNN:
         n_batches_per_epoch = total_samples//self.batch_size + 1
         total_training_loss = 0
         for _ in range(n_batches_per_epoch):
-            batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP = dataset.next_batch()
-            feeds = {self.input_tensor: batch_inputs,
+            batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes = dataset.next_batch()
+            feeds = {self.input_tensor: batch_inputs_feature_cubes,
                      self.target: batch_inputs,
                      self.seq_length: batch_seq_lens,
                      self.input_encode_tensor: batch_inputs_FP,

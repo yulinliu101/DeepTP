@@ -13,6 +13,7 @@ class DatasetEncoderDecoder:
                  actual_track_datapath,
                  flight_plan_datapath,
                  flight_plan_utilize_datapath,
+                 feature_cubes_datapath,
                  shuffle_or_not = True,
                  split = True,
                  batch_size = 128,
@@ -20,6 +21,7 @@ class DatasetEncoderDecoder:
         self.actual_track_datapath = actual_track_datapath
         self.flight_plan_datapath = flight_plan_datapath
         self.flight_plan_utilize_datapath = flight_plan_utilize_datapath
+        self.feature_cubes_datapath = feature_cubes_datapath
         self.shuffle_or_not = shuffle_or_not
         self.split = split
         self.batch_size = batch_size
@@ -28,13 +30,30 @@ class DatasetEncoderDecoder:
         self.dep_lon = kwargs.get('dep_lon', -95.33333333)
         self.idx = kwargs.get('idx', 0)
 
-        self.all_tracks, self.all_seq_lens, self.data_mean, self.data_std, self.all_FP_tracks, self.all_seq_lens_FP, self.FP_mean, self.FP_std = self.load_data()
+        self.all_tracks, \
+            self.all_seq_lens, \
+                self.data_mean, \
+                    self.data_std, \
+                        self.all_FP_tracks, \
+                            self.all_seq_lens_FP, \
+                                self.FP_mean, \
+                                    self.FP_std = self.load_track_data()
+
+        self.feature_cubes, self.feature_cubes_mean, self.feature_cubes_std = self.load_feature_cubes()
+        self.feature_cubes = np.split(self.feature_cubes, np.cumsum(self.all_seq_lens))[:-1]
 
         if self.shuffle_or_not:
             self.all_tracks, \
               self.all_seq_lens, \
                 self.all_FP_tracks, \
-                  self.all_seq_lens_FP = shuffle(self.all_tracks, self.all_seq_lens, self.all_FP_tracks, self.all_seq_lens_FP, random_state = 101)
+                  self.all_seq_lens_FP, \
+                    self.feature_cubes = shuffle(self.all_tracks, 
+                                                 self.all_seq_lens, 
+                                                 self.all_FP_tracks, 
+                                                 self.all_seq_lens_FP, 
+                                                 self.feature_cubes,
+                                                 random_state = 101)
+
         if self.split:
             self.train_tracks, \
              self.dev_tracks, \
@@ -43,42 +62,49 @@ class DatasetEncoderDecoder:
                 self.train_FP_tracks, \
                  self.dev_FP_tracks, \
                   self.train_seq_lens_FP, \
-                   self.dev_seq_lens_FP = train_test_split(self.all_tracks, 
-                                                           self.all_seq_lens, 
-                                                           self.all_FP_tracks,
-                                                           self.all_seq_lens_FP,
-                                                           random_state = 101, 
-                                                           train_size = 0.8,
-                                                           test_size = None)
+                   self.dev_seq_lens_FP, \
+                    self.train_feature_cubes, \
+                     self.dev_feature_cubes = train_test_split(self.all_tracks, 
+                                                               self.all_seq_lens, 
+                                                               self.all_FP_tracks,
+                                                               self.all_seq_lens_FP,
+                                                               self.feature_cubes,
+                                                               random_state = 101, 
+                                                               train_size = 0.8,
+                                                               test_size = None)
 
         self.train_tracks = _pad(self.train_tracks, self.train_seq_lens)
+        self.train_feature_cubes = _pad(self.train_feature_cubes, self.train_seq_lens)
         self.n_train_data_set = self.train_tracks.shape[0]
 
-    def load_data(self):
-        track_data = pd.read_csv(self.actual_track_datapath, header = 0, usecols = [0, 7, 8, 9, 12])
+    def load_track_data(self):
+        track_data = pd.read_csv(self.actual_track_datapath, header = 0, usecols = [1, 8, 9, 10, 13, 15, 19], index_col = 0)
+        # FID, Lat, Lon, Alt, DT, Speed (nmi/sec), course
         FP_track = pd.read_csv(self.flight_plan_datapath)
         FP_utlize = pd.read_csv(self.flight_plan_utilize_datapath, header = 0, usecols = [19,1])
 
-        # subtract departure airport's [lat, lon] from FP track and standardize
+        # subtract departure airport's [lat, lon] from flight plan (FP) track and standardize
         FP_track[['LATITUDE', 'LONGITUDE']] -= np.array([self.dep_lat, self.dep_lon])
         avg_FP = FP_track[['LATITUDE', 'LONGITUDE']].mean().values
         std_err_FP = FP_track[['LATITUDE', 'LONGITUDE']].std().values
         FP_track[['LATITUDE', 'LONGITUDE']] = (FP_track[['LATITUDE', 'LONGITUDE']] - avg_FP)/std_err_FP
 
-        # merge FP with track data
+        # merge track data with FP utilize data
         track_data_with_FP_id = track_data.merge(FP_utlize, left_on = 'FID', right_on = 'FID', how = 'inner')
         # process FP tracks
+        # Long format to wide format
         FP_track_wide = FP_track.groupby('FLT_PLAN_ID').apply(lambda x: x[['LATITUDE', 'LONGITUDE']].values.reshape(1, -1)).reset_index()
         FP_track_wide.columns = ['FLT_PLAN_ID', 'FP_tracks']
         FP_track_wide['seq_len'] = FP_track_wide.FP_tracks.apply(lambda x: x.shape[1]//2)
-        track_data_with_FP = track_data_with_FP_id.merge(FP_track_wide, left_on='FLT_PLAN_ID', right_on = 'FLT_PLAN_ID')
 
+        # merge track data with wide form of FP tracks
+        track_data_with_FP = track_data_with_FP_id.merge(FP_track_wide, left_on='FLT_PLAN_ID', right_on = 'FLT_PLAN_ID')
         seq_length_tracks = track_data_with_FP.groupby('FID').FLT_PLAN_ID.count().values.astype(np.int32)
         track_data_with_FP['cumDT'] = track_data_with_FP.groupby('FID').DT.transform(pd.Series.cumsum)
-        tracks = track_data_with_FP[['Lat', 'Lon', 'Alt', 'cumDT']].values.astype(np.float32)
+        tracks = track_data_with_FP[['Lat', 'Lon', 'Alt', 'cumDT', 'Speed', 'course']].values.astype(np.float32)
         
         # use delta lat and delta lon
-        tracks = tracks - np.array([self.dep_lat, self.dep_lon, 0, 0])
+        tracks = tracks - np.array([self.dep_lat, self.dep_lon, 0, 0, 0, 0])
         avg = tracks.mean(axis = 0)
         std_err = tracks.std(axis = 0)
         tracks = (tracks - avg)/std_err
@@ -90,7 +116,27 @@ class DatasetEncoderDecoder:
 
         FP_tracks_split = _pad_and_flip_FP(FP_tracks_split, seq_length_FP)
 
+        # all standardized
         return tracks_split, seq_length_tracks, avg, std_err, FP_tracks_split, seq_length_FP, avg_FP, std_err_FP
+
+    def load_feature_cubes(self):
+        # return np.ones((150000, 4, 20, 20)), np.ones((4, 20, 20)), np.ones((4, 20,20))
+        feature_cubes_pointer = np.load(self.feature_cubes_datapath)
+        # feature_grid = feature_cubes_pointer['feature_grid']
+        # query_idx = feature_cubes_pointer['query_idx']
+        feature_cubes = feature_cubes_pointer['feature_cubes']
+        # feature_cubes = np.transpose(feature_cubes, axes = [0, 3, 1, 2]) 
+        # feature_cubes have shape of [N_points, 20, 20, 4]
+        
+        # Standardize the features
+        feature_cubes_mean = np.mean(feature_cubes, axis = 0)
+        feature_cubes_std = np.std(feature_cubes, axis = 0)
+        # Do NOT standardize the binary layer!
+        feature_cubes_mean[0, :, :] = 0.
+        feature_cubes_std[0, :, :] = 1.
+        feature_cubes_norm = (feature_cubes - feature_cubes_mean)/feature_cubes_std # shape of [N_point, 20, 20, 4]
+
+        return feature_cubes_norm, feature_cubes_mean, feature_cubes_std
 
     def next_batch(self):
         # n_sample = self.n_train_data_set
@@ -108,6 +154,7 @@ class DatasetEncoderDecoder:
                 #                                        self.train_FP_tracks, 
                 #                                        self.train_seq_lens_FP)
                 idx_list = shuffle(idx_list)
+
         if train_dev_test == 'train':
             endidx = min(self.idx + self.batch_size, self.n_train_data_set)
             batch_seq_lens = self.train_seq_lens[idx_list[self.idx:endidx]]
@@ -115,21 +162,25 @@ class DatasetEncoderDecoder:
 
             batch_seq_lens_FP = self.train_seq_lens_FP[idx_list[self.idx:endidx]]
             batch_inputs_FP = self.train_FP_tracks[idx_list[self.idx:endidx], :, :]
+
+            batch_inputs_feature_cubes = self.train_feature_cubes[self.idx:endidx, :, :, :, :]
+
             self.idx += self.batch_size
             
         batch_targets = None
-        return batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP
+        return batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes
             
 
 def _pad(inputs, inputs_len):
     # inputs is a list of np arrays
     # inputs_len is a np array
-
+    _zero_placeholder = ((0,0),) * (len(inputs[0].shape)-1)
     max_len = inputs_len.max()
     _inputs = []
     i = 0
     for _input in inputs:
-        _inputs.append(np.pad(_input, ((0, max_len - inputs_len[i]), (0,0)), 'constant', constant_values = 0))
+        _tmp_zeros = ((0, max_len - inputs_len[i]), *_zero_placeholder)
+        _inputs.append(np.pad(_input, _tmp_zeros, 'constant', constant_values = 0))
         i+=1
     return np.asarray(_inputs)
 
