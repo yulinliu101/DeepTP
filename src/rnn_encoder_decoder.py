@@ -204,7 +204,7 @@ class LSTM_model:
             print("dense shape (reshape from pool2): ", dense.get_shape())
             fc1 = tf.nn.elu(tf.nn.xw_plus_b(dense, wcd, bcd))
             print("fully connected layer shape: ", fc1.get_shape())
-            fc1_dropout = tf.nn.dropout(fc1, dropout[1])
+            fc1_dropout = tf.nn.dropout(fc1, 1 - dropout[1])
 
 
         with tf.name_scope('embedding_decoder'):
