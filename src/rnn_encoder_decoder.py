@@ -96,8 +96,8 @@ class LSTM_model:
         n_hidden_1 = parser.getint('lstm', 'n_hidden_1')
         n_hidden_2 = parser.getint('lstm', 'n_hidden_2')
         n_cell_dim = parser.getint('lstm', 'n_cell_dim')
-        n_hidden_3 = int(eval(parser.get('lstm', 'n_hidden_3')))
-        n_hidden_4 = parser.getint('lstm', 'n_hidden_4')
+        # n_hidden_3 = int(eval(parser.get('lstm', 'n_hidden_3')))
+        # n_hidden_4 = parser.getint('lstm', 'n_hidden_4')
         n_controled_var = parser.getint('lstm', 'n_controled_var')
         n_prob_param = 1 + n_controled_var + sum(range(n_controled_var+1)) # 1 (pi) + number of elements in (mean vector + upper trig of cov)
         n_out = n_prob_param * n_mixture + 1 # ... + 1 (p_end)
@@ -140,10 +140,10 @@ class LSTM_model:
                 stack_encoder = tf.contrib.rnn.MultiRNNCell(cells_encoder, state_is_tuple=True)        
                 # Get layer activations (second output is the final state of the layer)
                 encoder_outputs, self.encoder_final_state = tf.nn.dynamic_rnn(cell = stack_encoder, 
-                                                                                inputs = layer_emb,
-                                                                                sequence_length = seq_length,
-                                                                                dtype = tf.float32,
-                                                                                time_major=False)
+                                                                              inputs = layer_emb,
+                                                                              sequence_length = seq_length,
+                                                                              dtype = tf.float32,
+                                                                              time_major=False)
             # # outputs has the shape of [batch_size, time, n_cell_dim]
             # # states has the shape of [batch_size, cell.state_size]
             # # Reshape to apply the same weights over the timesteps
@@ -198,7 +198,7 @@ class LSTM_model:
             conv4 = conv2d_bias(conv3, wc4, bc4, s = 1)
             print("conv 4 layer shape: ", conv4.get_shape())
             pool2 = max_pool(conv4, k = 2, s = 2)
-            print("conv 4 layer shape: ", pool2.get_shape())
+            print("pool 2 layer shape: ", pool2.get_shape())
             pool2_shape = tf.shape(pool2)
             dense = tf.reshape(pool2, [-1, pool2_shape[1]*pool2_shape[2]*pool2_shape[3]])
             print("dense shape (reshape from pool2): ", dense.get_shape())
