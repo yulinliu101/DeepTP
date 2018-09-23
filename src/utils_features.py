@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-27 21:41:43
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-09-22 18:35:42
+# @Last Modified time: 2018-09-23 15:34:20
 
 import os
 import numpy as np
@@ -185,13 +185,13 @@ class flight_track_feature_generator:
         
         print('================ match weather name info =================')
         # match with wind/ temperature fname
-        wind_query_idx, wind_valid_query, wind_time_objs = match_wind_fname(self.wind_fname_list, query_body, max_sec_bound = 3*3600)
+        wind_query_idx, wind_valid_query, wind_time_objs, self.wind_ftime_tree = match_wind_fname(self.wind_fname_list, query_body, max_sec_bound = 3*3600)
         flight_tracks.loc[wind_valid_query, 'wind_fname'] = wind_time_objs[wind_query_idx[wind_valid_query], 0]
         flight_tracks.loc[~wind_valid_query, 'wind_fname'] = np.nan
 
         # match with ncwf idx
-        wx_query_idx, wx_valid_query, wx_time_obj = match_ncwf_fname(self.start_time, query_body, max_sec_bound = 3600)
-        flight_tracks.loc[wx_valid_query, 'wx_fname'] = wx_time_obj[wx_query_idx[wx_valid_query]]
+        wx_query_idx, wx_valid_query, wx_time_obj, wx_fname_hourly, self.wx_ftime_tree = match_ncwf_fname(self.start_time, query_body, max_sec_bound = 3600)
+        flight_tracks.loc[wx_valid_query, 'wx_fname'] = wx_fname_hourly[wx_query_idx[wx_valid_query]]
         flight_tracks.loc[~wx_valid_query, 'wx_fname'] = np.nan
         flight_tracks.loc[wx_valid_query, 'wx_idx'] = wx_query_idx[wx_valid_query]
         flight_tracks.loc[~wx_valid_query, 'wx_idx'] = np.nan
@@ -199,13 +199,13 @@ class flight_track_feature_generator:
         return flight_tracks
 
     def _feature_grid_generator(self,
-                               theta_arr, 
-                               shift_xleft = 0, 
-                               shift_xright = 2, 
-                               shift_yup = 1, 
-                               shift_ydown = 1, 
-                               nx = 20, 
-                               ny = 20):
+                                theta_arr, 
+                                shift_xleft = 0, 
+                                shift_xright = 2, 
+                                shift_yup = 1, 
+                                shift_ydown = 1, 
+                                nx = 20, 
+                                ny = 20):
         """
         generate grid for all track points in a batch
         theta_arr = np.pi/2 - new_df.azimuth.values
@@ -225,11 +225,11 @@ class flight_track_feature_generator:
 
 
     def _generate_feature_cube(self, 
-                                flight_tracks,
-                                feature_grid_query_idx,
-                                nx,
-                                ny,
-                                wx_alt_buffer = 20):
+                               flight_tracks,
+                               feature_grid_query_idx,
+                               nx,
+                               ny,
+                               wx_alt_buffer = 20):
         """
         Given the flight track data (with agumented columns), generate wind and tempr cube for each track point
         use groupby function to speed up
@@ -267,11 +267,11 @@ class flight_track_feature_generator:
             if jj % 1000 == 0:
                 print('ELapsed time: %.2f seconds'%(time.time() - st))
                 print('working on ', gpidx)
-            wind_npz = np.load(self.wind_data_rootdir + gpidx[0])
-            tmp_uwind = wind_npz['uwind']
-            tmp_vwind = wind_npz['vwind']
-            tmp_tempr = wind_npz['tempr']
-
+            # wind_npz = np.load(self.wind_data_rootdir + gpidx[0])
+            # tmp_uwind = wind_npz['uwind']
+            # tmp_vwind = wind_npz['vwind']
+            # tmp_tempr = wind_npz['tempr']
+            tmp_uwind, tmp_vwind, tmp_tempr = self._load_wind_low_memory(gpidx[0])
             uwind_base = tmp_uwind[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
             vwind_base = tmp_vwind[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
             tempr_base = tmp_tempr[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
@@ -283,6 +283,14 @@ class flight_track_feature_generator:
         print('Finished wind/ temperature extraction!\n')
         
         return feature_cubes
+
+    def _load_wind_low_memory(self, wind_fname):
+        wind_npz = np.load(os.path.join(self.wind_data_rootdir, wind_fname))
+        tmp_uwind = wind_npz['uwind']
+        tmp_vwind = wind_npz['vwind']
+        tmp_tempr = wind_npz['tempr']
+
+        return tmp_uwind, tmp_vwind, tmp_tempr
 
     def feature_arr_generator(self, 
                               flight_tracks,
@@ -321,6 +329,7 @@ class flight_track_feature_generator:
 
 
 def match_wind_fname(wind_fname_list, query_body, max_sec_bound = 21960):
+    # If there is wind file, then return the closest one within the max_sec_bound (in seconds)
     time_objs = []
     trash_holder = []
     wind_fname_list.sort()
@@ -343,21 +352,28 @@ def match_wind_fname(wind_fname_list, query_body, max_sec_bound = 21960):
     wind_ftime_tree = cKDTree(time_objs[:, -1].reshape(-1, 1))
     query_dist, query_index = wind_ftime_tree.query(query_body.reshape(-1,1), p = 1, distance_upper_bound = max_sec_bound)
     valid_query = query_index < time_objs.shape[0]
-    return query_index, valid_query, time_objs
+    return query_index, valid_query, time_objs, wind_ftime_tree
 
 def match_ncwf_fname(start_time, query_body, max_sec_bound = 7200):
+    # If there is any weather instance within the max_sec_bound, then return only the closest one (w.r.t. time)
     time_obj_wx = []
     time_diff_wx = []
+    ncwf_fname_hourly = []
     for obj in start_time:
+        tmp_fname = '%d_%s_%s_%s00Z.npz'%(obj[0], str(obj[1]).zfill(2), str(obj[2]).zfill(2), str(obj[3]).zfill(2))
         tmp_time = parser.parse('%d/%d/%d %d:00:00'%(obj[1], obj[2], obj[0], obj[3]))
+        ncwf_fname_hourly.append(tmp_fname)
         time_obj_wx.append(tmp_time)
         time_diff_wx.append((tmp_time - baseline_time).total_seconds())
+    
+    ncwf_fname_hourly = np.array(ncwf_fname_hourly)
     time_diff_wx = np.array(time_diff_wx)
     time_obj_wx = np.array(time_obj_wx)
     wx_ftime_tree = cKDTree(time_diff_wx.reshape(-1, 1))
+
     query_dist, query_index = wx_ftime_tree.query(query_body.reshape(-1,1), p = 1, distance_upper_bound = max_sec_bound)
     valid_query = query_index < time_diff_wx.shape[0]
-    return query_index, valid_query, time_obj_wx
+    return query_index, valid_query, time_obj_wx, ncwf_fname_hourly, wx_ftime_tree
 
 
 

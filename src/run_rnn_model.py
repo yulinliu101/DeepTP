@@ -53,7 +53,7 @@ class trainRNN:
                                                  feature_cubes_datapath = '../../DATA/DeepTP/feature_cubes.npz',
                                                  shuffle_or_not = True,
                                                  split = True,
-                                                 batch_size = 256,
+                                                 batch_size = self.batch_size,
                                                  dep_lat = 29.98333333,
                                                  dep_lon = -95.33333333)
 
@@ -198,33 +198,41 @@ class trainRNN:
                         debug = False
                         weights = 0.1
                         with tf.device('/cpu:0'):
-                            # predicted_tracks, final_top_k_idx_seq, buffer_total_logprob, mus, covs = self.sample_seq(start_tracks = tracks_split, 
-                            #                                                                                    standard_mu = self.cpu_dataset.data_mean, 
-                            #                                                                                    standard_std = self.cpu_dataset.data_std, 
-                            #                                                                                    normalized_flight_plan = fp_tracks_split, 
-                            #                                                                                    flight_plan_length = fp_seq_length,
-                            #                                                                                    max_length = 150, 
-                            #                                                                                    beam_search = True,
-                            #                                                                                    width = width,
-                            #                                                                                    weights = weights,
-                            #                                                                                    keep_search = keep_search,
-                            #                                                                                    debug = debug)
+                            # predicted_tracks, \
+                            #  final_top_k_idx_seq, \
+                            #   buffer_total_logprob, \
+                            #    mus, \
+                            #     covs = self.sample_seq(start_tracks = tracks_split, 
+                            #                            standard_mu = self.cpu_dataset.data_mean, 
+                            #                            standard_std = self.cpu_dataset.data_std, 
+                            #                            normalized_flight_plan = fp_tracks_split, 
+                            #                            flight_plan_length = fp_seq_length,
+                            #                            max_length = 150, 
+                            #                            beam_search = True,
+                            #                            width = width,
+                            #                            weights = weights,
+                            #                            keep_search = keep_search,
+                            #                            debug = debug)
 
-                            predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob = self.sample_seq_mu_cov(start_tracks = tracks_split, 
-                                                                                                               standard_mu = self.cpu_dataset.data_mean, 
-                                                                                                               standard_std = self.cpu_dataset.data_std, 
-                                                                                                               normalized_flight_plan = fp_tracks_split, 
-                                                                                                               flight_plan_length = fp_seq_length,
-                                                                                                               max_length = 175, 
-                                                                                                               search_power = search_power,
-                                                                                                               weights = weights,
-                                                                                                               debug = debug)
+                            predicted_tracks, \
+                             predicted_tracks_cov, \
+                              buffer_total_logprob, \
+                               buffer_pi_prob = self.sample_seq_mu_cov(start_tracks = tracks_split, 
+                                                                       standard_mu = self.cpu_dataset.data_mean, 
+                                                                       standard_std = self.cpu_dataset.data_std, 
+                                                                       normalized_flight_plan = fp_tracks_split, 
+                                                                       flight_plan_length = fp_seq_length,
+                                                                       max_length = 70, 
+                                                                       search_power = search_power,
+                                                                       weights = weights,
+                                                                       debug = debug)
 
-                                                                                   # max_length = 150, 
-                                                                                   # beam_search = True,
-                                                                                   # width = 15,
-                                                                                   # keep_search = 100
-                        predicted_tracks = predicted_tracks + np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0])
+                                                                       # max_length = 150, 
+                                                                       # beam_search = True,
+                                                                       # width = 15,
+                                                                       # keep_search = 100
+
+                        predicted_tracks = predicted_tracks + np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0, 0, 0])
                         # mus = mus + np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0])
                         # with open('../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100), 'wb') as wpkl:
                         #     pickle.dump((predicted_tracks, final_top_k_idx_seq, buffer_total_logprob, mus, covs), wpkl)
@@ -285,9 +293,9 @@ class trainRNN:
             #     logger.info('Validating ...')
             #     dev_accuracy = self.run_dev_epoch(epoch)
             #     logger.info('==============================')
-            if (epoch+1) % 100 == 0:
+            if (epoch+1) % 200 == 0:
                 print('learning rate is %f'%self.MODEL.learning_rate)
-                self.MODEL.learning_rate = self.MODEL.learning_rate * 0.5
+                self.MODEL.learning_rate = self.MODEL.learning_rate * 0.75
 
             if (epoch + 1 == self.epochs) or is_checkpoint_step:
                 # summary_line = self.sess.run(self.loss_summary, feed_dict = {self.loss_placeholder: train_epoch_loss})
@@ -494,15 +502,15 @@ class trainRNN:
         return final_seq
 
     def sample_seq_mu_cov(self, 
-                           start_tracks, 
-                           standard_mu, 
-                           standard_std, 
-                           normalized_flight_plan, 
-                           flight_plan_length, 
-                           max_length = 100, 
-                           search_power = 3,
-                           weights = 0.1,
-                           debug = False):
+                          start_tracks, # normalized
+                          # standard_mu, 
+                          # standard_std, 
+                          normalized_flight_plan, 
+                          flight_plan_length, 
+                          max_length = 100, 
+                          search_power = 3,
+                          weights = 0.1,
+                          debug = False):
         # start_tracks should have the shape of [n_seq, n_time, n_input]
         # normalized_flight_plan should have the shape of [n_seq, n_time, n_input] (also flipped)
         # normalized_flight_plan should be (flight_plan - [dep_lat, dep_lon] - fp_mu)/fp_std; and then pad_and_flip
@@ -512,7 +520,7 @@ class trainRNN:
         #################################################
         #############   data preprocessing  #############
         #################################################
-        start_tracks = (start_tracks - standard_mu)/standard_std
+        # start_tracks = (start_tracks - standard_mu)/standard_std
         n_seq, n_time, _ = start_tracks.shape
         
         #########################################################

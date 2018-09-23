@@ -81,6 +81,8 @@ class DatasetEncoderDecoder:
         self.train_tracks = _pad(self.train_tracks, self.train_seq_lens)
         self.train_feature_cubes = _pad(self.train_feature_cubes, self.train_seq_lens)
         self.n_train_data_set = self.train_tracks.shape[0]
+    def __str__(self):
+        return 'Dataset Class to Conduct Training Procedure'
 
     def load_track_data(self):
         track_data = pd.read_csv(self.actual_track_datapath, header = 0, usecols = [1, 8, 9, 10, 13, 15, 19], index_col = 0)
@@ -150,14 +152,6 @@ class DatasetEncoderDecoder:
         if self.idx >= self.n_train_data_set:
             self.idx = 0
             if self.shuffle_or_not:
-                # self.all_tracks, self.all_seq_lens, self.all_FP_tracks, self.all_seq_lens_FP = shuffle(self.all_tracks, self.all_seq_lens, self.all_FP_tracks, self.all_seq_lens_FP)
-                # self.train_tracks, \
-                #   self.train_seq_lens, \
-                #     self.train_FP_tracks, \
-                #       self.train_seq_lens_FP = shuffle(self.train_tracks, 
-                #                                        self.train_seq_lens, 
-                #                                        self.train_FP_tracks, 
-                #                                        self.train_seq_lens_FP)
                 idx_list = shuffle(idx_list)
 
         if train_dev_test == 'train':
@@ -208,6 +202,7 @@ class DatasetSample(flight_track_feature_generator):
                  train_track_std,
                  train_fp_mean,
                  train_fp_std,
+                 ncwf_data_rootdir = '../../DATA/NCWF/gridded_storm_hourly/',
                  test_track_dir = '../../DATA/DeepTP/test_flight_tracks.csv',
                  test_fp_dir = '../../DATA/DeepTP/test_flight_plans.csv',
                  flight_plan_util_dir = '../../DATA/DeepTP/test_flight_plans_util.CSV',
@@ -222,6 +217,7 @@ class DatasetSample(flight_track_feature_generator):
         self.train_track_std = train_track_std
         self.train_fp_mean = train_fp_mean
         self.train_fp_std = train_fp_std
+        self.ncwf_data_rootdir = ncwf_data_rootdir
 
         self.dep_lat = kwargs.get('dep_lat', 29.98333333)
         self.dep_lon = kwargs.get('dep_lon', -95.33333333)
@@ -269,15 +265,125 @@ class DatasetSample(flight_track_feature_generator):
 
         return fp_tracks_split, tracks_split, fp_seq_length, seq_length, flight_tracks
 
-    def load_test_track_features(self):
+
+    # @Override parent method _generate_feature_cube
+    def _generate_feature_cube(self, 
+                               flight_tracks,
+                               feature_grid_query_idx,
+                               nx,
+                               ny,
+                               wx_alt_buffer = 20):
+        """
+        Given the flight track data (with agumented columns), generate wind and tempr cube for each track point
+        use groupby function to speed up
+
+        return a numpy array (tensor) with shape [None, 20, 20, 4]
+        first layer: ncwf weather
+        second layer: temperature
+        third layer: u wind
+        fourth layer: v wind
+        """
+        feature_cubes = np.zeros(shape = (feature_grid_query_idx.shape[0], nx, ny, 4), dtype = np.float32)
+
+        #######################################################################################################
+        self.wx_testdata_holder = []
+        # append all weather data into one so that later matching will be more efficient
+        groups = flight_tracks[['FID', 'wx_fname', 'wx_alt']].groupby(['wx_fname', 'wx_alt'])
+        ng = groups.ngroups
+
+        print('Extract ncwf convective weather from %d groups ...'%ng)
+        for gpidx, gp in groups:
+            wx_data_single = self._load_ncwf_low_memory(gpidx[0])
+            self.wx_testdata_holder.append(wx_data_single) # each element is the ncwf array with the order of wx_fname
+            # nan has been automatically dropped
+            wx_alt_cover = self.wx_unique_alt[(self.wx_unique_alt >= (gpidx[1] - wx_alt_buffer)) & \
+                                              (self.wx_unique_alt <= (gpidx[1] + wx_alt_buffer))]
+            wx_alt_idxmin = self.wx_alt_dict[wx_alt_cover.min()]
+            wx_alt_idxmax = self.wx_alt_dict[wx_alt_cover.max()] + 1
+            wx_base = np.any(wx_data_single[wx_alt_idxmin: wx_alt_idxmax, :][:, feature_grid_query_idx[gp.index]], axis = 0).astype(np.float32).reshape(-1, nx, ny)
+            feature_cubes[gp.index, :, :, 0] = wx_base
+        print('Finished ncwf wx extraction!\n')
+
+        #######################################################################################################
+        groups = flight_tracks[['FID', 'wind_fname', 'levels']].groupby(['wind_fname', 'levels'])
+        ng = groups.ngroups
+        self.uwind_testdata_holder = []
+        self.vwind_testdata_holder = []
+        self.tempr_testdata_holder = []
+        print('Extract wind/ temperature from %d groups ...'%ng)
+        jj = -1
+        for gpidx, gp in groups:
+            jj += 1
+            # wind_npz = np.load(os.path.join(self.wind_data_rootdir, gpidx[0]))
+            # tmp_uwind = wind_npz['uwind']
+            # tmp_vwind = wind_npz['vwind']
+            # tmp_tempr = wind_npz['tempr']
+            tmp_uwind, tmp_vwind, tmp_tempr = self._load_wind_low_memory(gpidx[0])
+
+            self.uwind_testdata_holder.append(tmp_uwind)
+            self.vwind_testdata_holder.append(tmp_vwind)
+            self.tempr_testdata_holder.append(tmp_tempr)
+
+            uwind_base = tmp_uwind[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
+            vwind_base = tmp_vwind[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
+            tempr_base = tmp_tempr[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
+
+            feature_cubes[gp.index, :, :, 1] = tempr_base
+            feature_cubes[gp.index, :, :, 2] = uwind_base
+            feature_cubes[gp.index, :, :, 3] = vwind_base
+            
+        print('Finished wind/ temperature extraction!\n')
         
+        return feature_cubes
+
+    def _load_ncwf_low_memory(self, ncwf_fname):
+        return np.load(os.path.join(self.ncwf_data_rootdir, ncwf_fname))['ncwf_arr']
+
+    def generate_test_track_feature_cubes(self,
+                                          flight_tracks,
+                                          shift_xleft = 0,
+                                          shift_xright = 2,
+                                          shift_yup = 1,
+                                          shift_ydown = 1,
+                                          nx = 20,
+                                          ny = 20):
+        feature_cubes, feature_grid, query_idx = self.feature_arr_generator(flight_tracks = flight_tracks,
+                                                                            shift_xleft = shift_xleft,
+                                                                            shift_xright = shift_xright,
+                                                                            shift_yup = shift_yup,
+                                                                            shift_ydown = shift_ydown,
+                                                                            nx  = nx,
+                                                                            ny = ny)
 
 
+        return feature_cubes, feature_grid, query_idx
+
+    def generate_predicted_pnt_feature_cube(self, 
+                                            predicted_point,
+                                            known_flight_tracks,
+                                            shift_xleft = 0,
+                                            shift_xright = 2,
+                                            shift_yup = 1,
+                                            shift_ydown = 1,
+                                            nx = 20,
+                                            ny = 20):
+        """
+        predicted_point has the form of [Lat, Lon, Alt, cumDT, Speed, course], and the shape should be: [?]
+        """
 
 
+        # Step 1: map cumDT to Elaps_time
+
+        # Step 2: calculate azimuth
+
+
+        # Step 3: Map Elaps_time with wx_fname and wind_fname
+
+
+        # Step 4: generate feature cube
+        TODO
 
         return
-
 
 
 

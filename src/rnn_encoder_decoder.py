@@ -27,8 +27,8 @@ def variable_on_device(name, shape, initializer, device = '/cpu:0'):
         var = tf.get_variable(name=name, shape=shape, initializer=initializer)
     return var
 
-def conv2d_bias(inputs, w, b, s):
-    return tf.nn.elu(tf.nn.bias_add(tf.nn.conv2d(inputs, w, strides = [1, s, s, 1], padding = 'SAME'), b))
+def conv2d_bias(inputs, w, b, s, padding = 'SAME'):
+    return tf.nn.elu(tf.nn.bias_add(tf.nn.conv2d(inputs, w, strides = [1, s, s, 1], padding = padding), b))
 
 def max_pool(inputs, k, s):
     return tf.nn.max_pool(inputs, ksize = [1, k, k, 1], strides = [1, s, s, 1], padding = 'VALID')
@@ -324,6 +324,8 @@ def get_mixture_coef(layer_out, n_mixture, n_controled_var):
 
     mu_layer = tf.reshape(mu_layer, (-1, n_mixture, n_controled_var)) # [batch*time, n_mixture, n_controled_var]
     L_layer = tf.reshape(L_layer, (-1, n_mixture, n_cov_trig))
+
+    # Cholesky_decomposition of a P.D. cov matrix is the product of a lower triangular matrix and its conjugate transpose
     L_layer = tf.contrib.distributions.fill_triangular(L_layer)
     L_layer = tf.contrib.distributions.matrix_diag_transform(L_layer, transform=tf.nn.softplus)
     
