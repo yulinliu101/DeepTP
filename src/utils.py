@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-16 14:51:38
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-09-06 15:44:40
+# @Last Modified time: 2018-09-22 19:01:56
 
 # api functions that are mostly called by other paks
 
@@ -48,30 +48,48 @@ def GetAzimuth(flight_track_df,
     # otherwise this function will return azimuth from last point
 
     CenterTraj = flight_track_df[['FID', 'Lat', 'Lon']]
-    CenterTraj['azimuth'] = last_pnt
+    # CenterTraj.loc[:, 'azimuth'] = last_pnt
     tmp_df = CenterTraj.shift(-1)
     azimuth_arr = g.inv(CenterTraj.Lon.values[:-1], 
                         CenterTraj.Lat.values[:-1], 
                         tmp_df.Lon.values[:-1], 
                         tmp_df.Lat.values[:-1])[0]
-
     if canonical:
+        # starting from x-axis
         if course:
-            CenterTraj.iloc[:-1]['azimuth'] = (90 - azimuth_arr)
+            azimuth_arr = np.append(90 - azimuth_arr, last_pnt)
         else:
-            CenterTraj.iloc[1:]['azimuth'] = (90 - azimuth_arr)
+            azimuth_arr = np.append(last_pnt, 90 - azimuth_arr)
     else:
         if course:
-            CenterTraj.iloc[:-1]['azimuth'] = azimuth_arr
+            azimuth_arr = np.append(azimuth_arr, last_pnt)
         else:
-            CenterTraj.iloc[1:]['azimuth'] = azimuth_arr
-    
+            azimuth_arr = np.append(last_pnt, azimuth_arr)
     if course:
-        CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].tail(1).index, 'azimuth'] = last_pnt
+        tmp_tail_idx = CenterTraj.groupby("FID")['Lat'].tail(1).index
+        azimuth_arr[tmp_tail_idx] = last_pnt
     else:
-        CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].head(1).index, 'azimuth'] = last_pnt
+        tmp_head_idx = CenterTraj.groupby("FID")['Lat'].head(1).index
+        azimuth_arr[tmp_head_idx] = last_pnt
+    return azimuth_arr
+
+    # if canonical:
+    #     if course:
+    #         CenterTraj.iloc[:-1]['azimuth'] = (90 - azimuth_arr)
+    #     else:
+    #         CenterTraj.iloc[1:]['azimuth'] = (90 - azimuth_arr)
+    # else:
+    #     if course:
+    #         CenterTraj.iloc[:-1]['azimuth'] = azimuth_arr
+    #     else:
+    #         CenterTraj.iloc[1:]['azimuth'] = azimuth_arr
     
-    return CenterTraj.azimuth
+    # if course:
+    #     CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].tail(1).index, 'azimuth'] = last_pnt
+    # else:
+    #     CenterTraj.loc[CenterTraj.groupby("FID")['azimuth'].head(1).index, 'azimuth'] = last_pnt
+    
+    # return CenterTraj.azimuth
 
 def ReshapeTrajLine(Traj):
     RepeatIndex = np.ones(Traj.shape[0],dtype=int)*2

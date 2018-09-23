@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-27 21:41:43
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-09-06 15:42:55
+# @Last Modified time: 2018-09-22 18:35:42
 
 import os
 import numpy as np
@@ -24,6 +24,7 @@ class flight_track_feature_generator:
                  grbs_smallgrid_kdtree_dir,
                  ncwf_arr_dir,
                  ncwf_alt_dict_dir,
+                 downsample = True,
                  **kwargs):
 
         self.flight_track_dir = flight_track_dir
@@ -36,8 +37,10 @@ class flight_track_feature_generator:
         self.ncwf_arr_dir = ncwf_arr_dir
         self.ncwf_alt_dict_dir = ncwf_alt_dict_dir
 
-        self.downsamp_rate_ft = kwargs.get('downsamp_rate_ft', 2)
-        self.downsamp_rate_fp = kwargs.get('downsamp_rate_fp', 1.05)
+        self.downsample = downsample
+        if self.downsample:
+            self.downsamp_rate_ft = kwargs.get('downsamp_rate_ft', 2)
+            self.downsamp_rate_fp = kwargs.get('downsamp_rate_fp', 1.05)
         self.load_ncwf_arr = kwargs.get('load_ncwf_arr', True)
 
         self.wind_fname_list, \
@@ -53,6 +56,8 @@ class flight_track_feature_generator:
                    self.ori_flight_plans, \
                     self.flight_plans_util, \
                      self.ori_flight_tracks = self.data_loader()
+    def __str__(self):
+        return 'flight track feature generator'
         
     def data_loader(self):
         """
@@ -117,17 +122,29 @@ class flight_track_feature_generator:
             with open(self.ncwf_alt_dict_dir, 'wb') as pfile:
                 pickle.dump(wx_alt_dict, pfile)
 
-
         print('================ Load flight track info =================')
-        downsamp_flight_tracks, \
-         downsamp_flight_plans, \
-          flight_plans, \
-           flight_plans_util, \
-            flight_tracks = downsample_track_data(path_to_fp = self.flight_plan_dir,
-                                                  path_to_fp_util = self.flight_plan_util_dir,
-                                                  path_to_track = self.flight_track_dir,
-                                                  downsamp_rate_ft = self.downsamp_rate_ft,
-                                                  downsamp_rate_fp = self.downsamp_rate_fp)
+        if self.downsample:
+            print('Downsampling...')
+            downsamp_flight_tracks, \
+             downsamp_flight_plans, \
+              flight_plans, \
+               flight_plans_util, \
+                flight_tracks = downsample_track_data(path_to_fp = self.flight_plan_dir,
+                                                      path_to_fp_util = self.flight_plan_util_dir,
+                                                      path_to_track = self.flight_track_dir,
+                                                      downsamp_rate_ft = self.downsamp_rate_ft,
+                                                      downsamp_rate_fp = self.downsamp_rate_fp)
+        else:
+            print('Original...')
+            import pandas as pd
+            flight_plans = pd.read_csv(self.flight_plan_dir)
+            flight_plans_util = pd.read_csv(self.flight_plan_util_dir)
+            flight_tracks = pd.read_csv(self.flight_track_dir)
+            flight_tracks['Elap_Time'] = pd.to_datetime(flight_tracks['Elap_Time'], errors = 'coerce')
+
+            downsamp_flight_tracks = None
+            downsamp_flight_plans = None
+
 
         print('================ Datasets have been loaded into memory =================')
         return wind_fname_list, \
@@ -301,7 +318,6 @@ class flight_track_feature_generator:
                                                    wx_alt_buffer = 20)
 
         return feature_cubes, feature_grid, query_idx
-
 
 
 def match_wind_fname(wind_fname_list, query_body, max_sec_bound = 21960):
