@@ -8,6 +8,10 @@ try:
 except:
     import pickle
 
+
+#TODO:
+# CHANGE COURSE TO COURSE - DIRECT_ROUTE_COURSE
+
 class DatasetEncoderDecoder:
     def __init__(self,
                  actual_track_datapath,
@@ -28,6 +32,7 @@ class DatasetEncoderDecoder:
 
         self.dep_lat = kwargs.get('dep_lat', 29.98333333)
         self.dep_lon = kwargs.get('dep_lon', -95.33333333)
+        self.direct_course = kwargs.get('direct_course', 0) # TODO
         self.idx = kwargs.get('idx', 0)
 
         self.all_tracks, \
@@ -193,6 +198,93 @@ def _pad_and_flip_FP(inputs, inputs_len):
         _inputs.append(np.pad(_input.reshape(-1,2)[::-1], ((0, max_len - inputs_len[i]), (0,0)), 'constant', constant_values = 0))
         i+=1
     return np.asarray(_inputs)
+
+
+
+from utils_features import match_wind_fname, match_ncwf_fname, flight_track_feature_generator
+class DatasetSample(flight_track_feature_generator):
+    def __init__(self,
+                 train_track_mean,
+                 train_track_std,
+                 train_fp_mean,
+                 train_fp_std,
+                 test_track_dir = '../../DATA/DeepTP/test_flight_tracks.csv',
+                 test_fp_dir = '../../DATA/DeepTP/test_flight_plans.csv',
+                 flight_plan_util_dir = '../../DATA/DeepTP/test_flight_plans_util.CSV',
+                 wind_data_rootdir = '../../DATA/filtered_weather_data/namanl_small_npz/',
+                 grbs_common_info_dir = '/media/storage/DATA/filtered_weather_data/grbs_common_info.npz',
+                 grbs_lvl_dict_dir = '/media/storage/DATA/filtered_weather_data/grbs_level_common_info.pkl',
+                 grbs_smallgrid_kdtree_dir = '/media/storage/DATA/filtered_weather_data/grbs_smallgrid_kdtree.pkl',
+                 ncwf_arr_dir = '../../DATA/NCWF/gridded_storm.npz',
+                 ncwf_alt_dict_dir = '../../DATA/NCWF/alt_dict.pkl',
+                 **kwargs):
+        self.train_track_mean = train_track_mean
+        self.train_track_std = train_track_std
+        self.train_fp_mean = train_fp_mean
+        self.train_fp_std = train_fp_std
+
+        self.dep_lat = kwargs.get('dep_lat', 29.98333333)
+        self.dep_lon = kwargs.get('dep_lon', -95.33333333)
+        self.direct_course = kwargs.get('direct_course', 0)
+
+        super().__init__(flight_track_dir = test_track_dir,
+                         flight_plan_dir = test_fp_dir,
+                         flight_plan_util_dir = flight_plan_util_dir,
+                         wind_data_rootdir = wind_data_rootdir,
+                         grbs_common_info_dir = grbs_common_info_dir,
+                         grbs_lvl_dict_dir = grbs_lvl_dict_dir,
+                         grbs_smallgrid_kdtree_dir = grbs_smallgrid_kdtree_dir,
+                         ncwf_arr_dir = ncwf_arr_dir,
+                         ncwf_alt_dict_dir = ncwf_alt_dict_dir,
+                         load_ncwf_arr = False,
+                         downsample = False)
+    def __str__(self):
+        return 'Dataset Class to Conduct Sampling Procedure'
+
+    def process_test_tracks(self):
+        flight_tracks = self.flight_track_preprocess(self.ori_flight_tracks)
+        flight_tracks['cumDT'] = flight_tracks.groupby('FID').DT.transform(pd.Series.cumsum)
+
+        # multiple tracks must have the same length for now
+        tracks = flight_tracks[['Lat', 'Lon', 'Alt', 'cumDT', 'Speed', 'course']].values.astype(np.float32)
+
+        # subtract depature's lat lon & course
+        # normalize tracks using train mean and train std
+        tracks = (tracks - np.array([self.dep_lat, self.dep_lon, 0, 0, 0, self.direct_course]) - self.train_track_mean)/self.train_track_std
+
+        seq_length = flight_tracks.groupby('FID').Lat.count().values.astype(np.int32)
+        tracks_split = np.split(tracks, np.cumsum(seq_length))[:-1]
+        tracks_split = np.array(tracks_split)
+
+        # flight plans
+        fp_tracks = self.ori_flight_plans[['LATITUDE', 'LONGITUDE']].values.astype(np.float32)
+
+        # first substract from the lat lon of departure airport
+        # then normalize using the training set mean and std
+        fp_tracks = (fp_tracks - np.array([self.dep_lat, self.dep_lon]) - self.train_fp_mean)/self.train_fp_std
+        fp_seq_length = self.ori_flight_plans.groupby('FLT_PLAN_ID').LATITUDE.count().values.astype(np.int32)
+        # pad and flip
+        fp_tracks_split = _pad_and_flip_FP(np.array(np.split(fp_tracks, np.cumsum(fp_seq_length))[:-1]), fp_seq_length)
+
+
+        return fp_tracks_split, tracks_split, fp_seq_length, seq_length, flight_tracks
+
+    def load_test_track_features(self):
+        
+
+
+
+
+
+        return
+
+
+
+
+
+
+
+
 
 
 
