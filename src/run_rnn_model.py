@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 from configparser import ConfigParser
 from rnn_encoder_decoder import LSTM_model
-from datasets import DatasetEncoderDecoder, _pad_and_flip_FP
+from datasets import DatasetEncoderDecoder, DatasetSample, _pad_and_flip_FP
 import logging
 import time
 from tensorflow.python.client import device_lib
@@ -172,23 +172,46 @@ class trainRNN:
                     logger.info("===============================================================")
                     logger.info(section.format('Restore model from %s'%self.restored_model_path))
                     if self.sample_traj:
-                        import pandas as pd
-                        logger.info("=============== Load testset data ... ==============")
-                        track_data = pd.read_csv('../data/test/test_data_more_points.csv', header = 0)
-                        tracks = track_data[['Lat', 'Lon', 'Alt', 'cumDT']].values.astype(np.float32)
-                        seq_length = track_data.groupby('SEQ').Lat.count().values.astype(np.int32)
-                        tracks_split = np.split(tracks, np.cumsum(seq_length))[:-1]
-                        tracks_split = np.array(tracks_split)
+                        self.dataset_sample = DatasetSample(train_track_mean = self.cpu_dataset.data_mean,
+                                                            train_track_std = self.cpu_dataset.data_std,
+                                                            train_fp_mean = self.cpu_dataset.FP_mean,
+                                                            train_fp_std = self.cpu_dataset.FP_std,
+                                                            feature_cubes_mean = self.cpu_dataset.feature_cubes_mean, 
+                                                            feature_cubes_std = self.cpu_dataset.feature_cubes_std,
+                                                            ncwf_data_rootdir = '../../DATA/NCWF/gridded_storm_hourly/',
+                                                            test_track_dir = '../../DATA/DeepTP/test_flight_tracks.csv',
+                                                            test_fp_dir = '../../DATA/DeepTP/test_flight_plans.csv',
+                                                            flight_plan_util_dir = '../../DATA/DeepTP/test_flight_plans_util.CSV',
+                                                            wind_data_rootdir = '../../DATA/filtered_weather_data/namanl_small_npz/',
+                                                            grbs_common_info_dir = '/media/storage/DATA/filtered_weather_data/grbs_common_info.npz',
+                                                            grbs_lvl_dict_dir = '/media/storage/DATA/filtered_weather_data/grbs_level_common_info.pkl',
+                                                            grbs_smallgrid_kdtree_dir = '/media/storage/DATA/filtered_weather_data/grbs_smallgrid_kdtree.pkl',
+                                                            ncwf_arr_dir = '../../DATA/NCWF/gridded_storm.npz',
+                                                            ncwf_alt_dict_dir = '../../DATA/NCWF/alt_dict.pkl')
+                        fp_tracks_split, tracks_split, fp_seq_length, seq_length, flight_tracks = self.dataset_sample.process_test_tracks()
 
-                        flight_plan = pd.read_csv('../data/test/test_flight_plan_more_points.csv', header = 0)
-                        fp_tracks = flight_plan[['Lat', 'Lon']].values.astype(np.float32)
-                        fp_tracks = (fp_tracks - np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon]) - self.cpu_dataset.FP_mean)/self.cpu_dataset.FP_std
-                        fp_seq_length = flight_plan.groupby('SEQ').Lat.count().values.astype(np.int32)
+                        start_tracks_feature_cubes, start_tracks_feature_grid, _ = self.dataset_sample.generate_test_track_feature_cubes(flight_tracks)
+                        start_tracks_feature_cubes = self.dataset_sample.reshape_feature_cubes(start_tracks_feature_cubes,
+                                                                                               track_length = seq_length)
 
-                        fp_tracks_split = _pad_and_flip_FP(np.array(np.split(fp_tracks, np.cumsum(fp_seq_length))[:-1]), fp_seq_length)
+                        self.known_flight_deptime = flight_tracks.groupby('FID')['FID', 'Elap_Time'].head(1).values
+                        # import pandas as pd
+                        # logger.info("=============== Load testset data ... ==============")
+                        # track_data = pd.read_csv('../data/test/test_data_more_points.csv', header = 0)
+                        # tracks = track_data[['Lat', 'Lon', 'Alt', 'cumDT']].values.astype(np.float32)
+                        # seq_length = track_data.groupby('SEQ').Lat.count().values.astype(np.int32)
+                        # tracks_split = np.split(tracks, np.cumsum(seq_length))[:-1]
+                        # tracks_split = np.array(tracks_split)
 
-                        # subtract depature's lat lon
-                        tracks_split -= np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0])
+                        # flight_plan = pd.read_csv('../data/test/test_flight_plan_more_points.csv', header = 0)
+                        # fp_tracks = flight_plan[['Lat', 'Lon']].values.astype(np.float32)
+                        # fp_tracks = (fp_tracks - np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon]) - self.cpu_dataset.FP_mean)/self.cpu_dataset.FP_std
+                        # fp_seq_length = flight_plan.groupby('SEQ').Lat.count().values.astype(np.int32)
+
+                        # fp_tracks_split = _pad_and_flip_FP(np.array(np.split(fp_tracks, np.cumsum(fp_seq_length))[:-1]), fp_seq_length)
+
+                        # # subtract depature's lat lon
+                        # tracks_split -= np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0])
                         # fp_tracks_split -= np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon])
 
                         logger.info("=============== Start sampling ... ==============")
@@ -218,11 +241,10 @@ class trainRNN:
                              predicted_tracks_cov, \
                               buffer_total_logprob, \
                                buffer_pi_prob = self.sample_seq_mu_cov(start_tracks = tracks_split, 
-                                                                       standard_mu = self.cpu_dataset.data_mean, 
-                                                                       standard_std = self.cpu_dataset.data_std, 
+                                                                       start_tracks_feature_cubes = start_tracks_feature_cubes,
                                                                        normalized_flight_plan = fp_tracks_split, 
                                                                        flight_plan_length = fp_seq_length,
-                                                                       max_length = 100, 
+                                                                       max_length = 40, 
                                                                        search_power = search_power,
                                                                        weights = weights,
                                                                        debug = debug)
@@ -232,7 +254,8 @@ class trainRNN:
                                                                        # width = 15,
                                                                        # keep_search = 100
 
-                        predicted_tracks = predicted_tracks + np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0, 0, 0])
+                        predicted_tracks = self.dataset_sample.unnormalize_flight_tracks(predicted_tracks)
+                        predicted_tracks_cov = predicted_tracks_cov * (self.dataset_sample.train_track_std**2)
                         # mus = mus + np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0])
                         # with open('../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100), 'wb') as wpkl:
                         #     pickle.dump((predicted_tracks, final_top_k_idx_seq, buffer_total_logprob, mus, covs), wpkl)
@@ -347,165 +370,9 @@ class trainRNN:
         # self.writer.add_summary(summary_line, epoch)
         return total_training_loss
 
-    def sample_seq(self, 
-                   start_tracks, 
-                   standard_mu, 
-                   standard_std, 
-                   normalized_flight_plan, 
-                   flight_plan_length, 
-                   max_length = 100, 
-                   beam_search = True, 
-                   width = 10, 
-                   weights = 0.1,
-                   keep_search = 50,
-                   debug = False):
-        # start_tracks should have the shape of [n_sample, n_time, n_input]
-        # normalized_flight_plan should have the shape of [n_sample, n_time, n_input] (also flipped)
-        # normalized_flight_plan should be (flight_plan - [dep_lat, dep_lon] - fp_mu)/fp_std; and then pad_and_flip
-        # for each sample in the start_tracks, it should have the same length
-        # flight_plan_length should have the shape of [n_sample]
-        start_tracks = (start_tracks - standard_mu)/standard_std
-        # fp_tracks = (flight_plan - fp_mu)/fp_std
-        n_seq, n_time, _ = start_tracks.shape
-        if not beam_search:
-            width = 1
-            keep_search = 1
-        buffer_size = width * keep_search
-
-        buffer_track = np.repeat(start_tracks, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 4]; duplicate of seq_1, then seq_2, ...
-        buffer_fp = np.repeat(normalized_flight_plan, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 2]; duplicate of seq_1, then seq_2, ...
-        buffer_fp_len = np.repeat(flight_plan_length, buffer_size) # shape of [n_seq*buffer_size,]
-        buffer_total_logprob = np.zeros(shape = (buffer_size * n_seq, 1), dtype = np.float32) # shape of [n_seq*buffer_size,1]
-
-        # # # init_state = np.zeros(shape = (self.n_layer, 2, n_seq, self.state_size))
-        # tmp_feed = {
-        #              # self.input_tensor: buffer_track,
-        #              # self.seq_length: [n_time]*n_seq*buffer_size,
-        #              self.input_encode_tensor: buffer_fp,
-        #              self.seq_len_encode: buffer_fp_len}
-        # encoder_state0 = self.sess.run(self.MODEL.encoder_final_state, feed_dict = tmp_feed) # should have the size of (buffer_size*n_seq) tuples
-        
-        feeds = {self.input_tensor: buffer_track,
-                 self.seq_length: [n_time]*n_seq*buffer_size,
-                 self.input_encode_tensor: buffer_fp,
-                 self.seq_len_encode: buffer_fp_len}
-
-        state, encoder_state = self.sess.run([self.MODEL.decode_final_state, self.MODEL._initial_state], feed_dict = feeds)
-        if debug:
-            with open('debug_file/encoder_state_debug.pkl', 'wb') as f:
-                    pickle.dump((state, encoder_state), f)
-
-
-        last_input_track_point = buffer_track[:, -1, None]   # shape of [n_seq*buffersize, 1, 4]
-
-        pi_sample_tensor = tf.multinomial(logits = self.MODEL.pi_layer, num_samples = 1, output_dtype = tf.int32)
-        coords_sample_tensor = self.MODEL.MVN_pdf.sample()
-        coords_logprob_tensor = self.MODEL.MVN_pdf.log_prob(coords_sample_tensor)
-
-        # coords_mu = self.MODEL.mu_layer
-        coords_cov_tensor = tf.matmul(self.MODEL.L_layer, self.MODEL.L_layer, transpose_b = True)
-        # predicted_tracks = np.repeat(start_tracks, width, axis = 0)
-        top_k_idx_seq = []
-        all_mus = []
-        all_covs = []
-        for i in range(max_length):
-            # self.MODEL._initial_state = state
-            feeds_update = {self.input_tensor: last_input_track_point,
-                            self.seq_length: [1]*n_seq*buffer_size,
-                            self.input_encode_tensor: buffer_fp,
-                            self.seq_len_encode: buffer_fp_len,
-                            self.MODEL._initial_state: state}
-            if (i == 0) and (debug is True):
-                with open('debug_file/init_state_debug.pkl', 'wb') as f:
-                    pickle.dump((state), f)
-            state, pi_logprob, coords_sample, pi_sample, coords_logprob, coords_mu, coords_cov = self.sess.run([self.MODEL.decode_final_state, 
-                                                                                                                 tf.log(self.MODEL.pi_layer), 
-                                                                                                                 coords_sample_tensor, 
-                                                                                                                 pi_sample_tensor, 
-                                                                                                                 coords_logprob_tensor,
-                                                                                                                 self.MODEL.mu_layer,
-                                                                                                                 coords_cov_tensor], feed_dict = feeds_update)
-            # print(pi_sample.flatten()[:5])
-            # print(coords_sample[:5, :, :])
-            """
-            state: tuple with size n_layers, each is a LSTMtuple object; state[0].c.shape = (n_seq*buffersize, 256); state[0].h.shape = (n_seq*buffersize, 256);
-            pi_logprob: np array with size (n_seq*buffersize, n_mixture)
-            coords_sample: np array with size (n_seq*buffersize, n_mixture, 4)
-            pi_sample: np array with size (n_seq * buffersize, 1)
-            coords_logprob: np array with size (n_seq*buffersize, n_mixture)
-            """
-            if (i == 0) and (debug is True):
-                with open('debug_file/inner_loop_debug.pkl', 'wb') as f:
-                    pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, coords_mu, coords_cov), f)
-
-            pi_logprob_sample = pi_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
-            coords_logprob_sample = coords_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
-            # total_log_prob = np.sum(pi_logprob, axis = 1, keepdims=True) + np.sum(coords_logprob, axis = 1, keepdims=True)
-            # buffer_total_logprob += (pi_logprob_sample/np.sum(pi_logprob, axis = 1, keepdims=True) + coords_logprob_sample/np.sum(coords_logprob, axis = 1, keepdims=True)) # has shape of [buffer_size*n_seq, 1]
-            buffer_total_logprob += (pi_logprob_sample*weights + coords_logprob_sample*(1-weights))/(0.95**i) # has shape of [buffer_size*n_seq, 1]
-            # select top k sequence
-            tmp_buffer_total_logprob = buffer_total_logprob.reshape(n_seq, buffer_size, 1)
-            top_k_idx = np.argsort(tmp_buffer_total_logprob, axis = 1)[:, (-width):,:] + (np.repeat(range(n_seq), width)*buffer_size).reshape(n_seq, width, 1)
-            top_k_idx = top_k_idx.reshape(-1)
-            top_k_idx_seq.append(top_k_idx)
-
-            top_k_logprob = buffer_total_logprob[top_k_idx]
-            selected_coords = coords_sample[top_k_idx, pi_sample[top_k_idx].flatten(), None] # shape of [width*n_seq, 1, 4]
-            selected_coords_mu = coords_mu[top_k_idx, pi_sample[top_k_idx].flatten(), None] # shape of [width*n_seq, 1, 4]
-            selected_coords_cov = coords_cov[top_k_idx, pi_sample[top_k_idx].flatten(), :] # shape of [width*n_seq, 1, 2, 2]
-            
-            state = tuple([tf.nn.rnn_cell.LSTMStateTuple(c = np.repeat(tmp_state.c[top_k_idx], keep_search, axis = 0), 
-                                                         h = np.repeat(tmp_state.h[top_k_idx], keep_search, axis = 0)) for tmp_state in state])
-            
-            last_input_track_point = np.repeat(selected_coords, keep_search, axis = 0) # shape of [n_seq*buffersize, 1, 4]
-            buffer_total_logprob = np.repeat(top_k_logprob, keep_search, axis = 0)
-            # last_input_track_point = param_sample[range(buffer_size*n_seq), pi_sample.flatten()].reshape(n_seq, 1, -1)
-            buffer_track = np.concatenate((buffer_track, last_input_track_point), axis = 1)
-
-            all_mus.append(np.repeat(selected_coords_mu, keep_search, axis = 0))
-            all_covs.append(np.repeat(selected_coords_cov, keep_search, axis = 0))
-
-        all_mus = np.array(all_mus)
-        all_covs = np.array(all_covs)
-        all_mus = all_mus * standard_std + standard_mu # shape of [max_length, n_seq*width, 1, 4]
-        all_covs = all_covs * (standard_std**2) # shape of [max_length, n_seq*width, 1, 4, 4]
-    
-        top_k_idx_seq = np.array(top_k_idx_seq) # shape of [max_length, n_seq*width]
-        final_tracks = (buffer_track * standard_std) + standard_mu # shape of [n_seq*buffersize, maxLlenth+init_len, 4]
-
-        final_top_k_idx_seq = self.arrange_top_k(top_k_idx_seq, keep_search) # shape of [max_lenth, n_seq*width]
-        final_tracks = final_tracks[final_top_k_idx_seq[::-1].T, range(n_time, max_length + n_time)]  # shape of [n_seq*width, max_length, 4]
-
-        a = np.transpose(all_covs, [1, 0, 2, 3])
-        b = np.transpose(all_mus, [1, 0, 2,3])
-        final_covs = a[final_top_k_idx_seq[::-1].T, range(max_length)]
-        final_mus = b[final_top_k_idx_seq[::-1].T, range(max_length)].reshape(n_seq*width, max_length, -1)
-
-        if debug:
-            with open('debug_file/outer_loop_debug.pkl', 'wb') as f:
-                pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, final_tracks, top_k_idx_seq, buffer_total_logprob, all_mus, all_covs), f)
-        return final_tracks, final_top_k_idx_seq, buffer_total_logprob, final_mus, final_covs
-
-    def arrange_top_k(self, top_k_idx_seq, keep_search):
-        final_seq = []
-        i = 0
-        for seq in top_k_idx_seq[::-1]:
-            if i == 0:
-                final_seq.append(seq)
-                idx = seq//keep_search
-            else:
-                seq = seq[idx]
-                final_seq.append(seq)
-                idx = seq // keep_search
-            i += 1
-        final_seq = np.array(final_seq)
-        return final_seq
-
     def sample_seq_mu_cov(self, 
                           start_tracks, # normalized
                           start_tracks_feature_cubes, # normalized
-                          # standard_mu, 
-                          # standard_std, 
                           normalized_flight_plan, 
                           flight_plan_length, 
                           max_length = 100, 
@@ -527,8 +394,9 @@ class trainRNN:
         #########################################################
         #############   initialize neural network   #############
         #########################################################
-        encoder_state = self.sess.run([self.MODEL.encoder_final_state], feed_dict = {self.input_encode_tensor: normalized_flight_plan,
-                                                                                     self.seq_len_encode: flight_plan_length})
+        encoder_state = self.sess.run([self.MODEL.encoder_final_state], 
+                                      feed_dict = {self.input_encode_tensor: normalized_flight_plan,
+                                                   self.seq_len_encode: flight_plan_length})
         # feeds = {self.input_tensor: start_tracks,
         #          self.seq_length: [n_time]*n_seq,
         #          # self.input_encode_tensor: normalized_flight_plan,
@@ -551,24 +419,25 @@ class trainRNN:
         # dynamic shapes
         # cur_time_len = n_time
         for i in range(search_power):
-            # cur_time_len += 1
+            print('current search power: %d'%i)
             if i == 0:
-                feeds_update = {self.input_tensor: start_tracks,
+                feeds_update = {self.input_tensor: start_tracks_feature_cubes,
                                 self.seq_length: [n_time]*n_seq,
                                 # self.input_encode_tensor: normalized_flight_plan,
                                 # self.seq_len_encode: flight_plan_length,
                                 self.MODEL._initial_state: encoder_state}
             else:
-                feeds_update = {self.input_tensor: last_input_track_point,
+                feeds_update = {self.input_tensor: pred_feature_cubes,
                                 self.seq_length: [1]*last_input_track_point.shape[0],
                                 # self.input_encode_tensor: normalized_flight_plan,
                                 # self.seq_len_encode: flight_plan_length,
                                 self.MODEL._initial_state: state}
             state, pi_logprob, coords_logprob, coords_mu, coords_cov = self.sess.run([self.MODEL.decode_final_state, 
-                                                                                     tf.log(self.MODEL.pi_layer), 
-                                                                                     coords_logprob_tensor,
-                                                                                     self.MODEL.mu_layer,
-                                                                                     coords_cov_tensor], feed_dict = feeds_update)
+                                                                                      tf.log(self.MODEL.pi_layer), 
+                                                                                      coords_logprob_tensor,
+                                                                                      self.MODEL.mu_layer,
+                                                                                      coords_cov_tensor], 
+                                                                                     feed_dict = feeds_update)
             if i == 0:
                 # only select the last element (last time stamp)
                 pi_logprob = pi_logprob[range(n_time - 1, n_time*n_seq, n_time), :]
@@ -602,6 +471,17 @@ class trainRNN:
                 final_tracks = np.concatenate((np.repeat(start_tracks, self.n_mixture, axis = 0), last_input_track_point), axis = 1)
                 # has the shape of [n_seq*n_mixture, n_time+1, 4]
                 final_tracks_cov = last_input_track_point_cov.copy()
+
+                pred_feature_cubes, \
+                 pred_feature_grid, \
+                  predicted_matched_info = self.dataset_sample.generate_predicted_pnt_feature_cube(predicted_final_track = final_tracks, 
+                                                                                                   known_flight_deptime = self.known_flight_deptime,
+                                                                                                   shift_xleft = 0,
+                                                                                                   shift_xright = 2, 
+                                                                                                   shift_yup = 1,
+                                                                                                   shift_ydown = 1,
+                                                                                                   nx = 20,
+                                                                                                   ny = 20)
             else:
                 buffer_total_logprob = np.repeat(buffer_total_logprob, self.n_mixture, axis = 0)
                 buffer_pi_prob = np.repeat(buffer_pi_prob, self.n_mixture, axis = 0)
@@ -611,9 +491,20 @@ class trainRNN:
                 # has the shape of [n_seq*n_mixture^(i+1), ?, 4]
                 final_tracks_cov = np.concatenate((np.repeat(final_tracks_cov, self.n_mixture, axis = 0), last_input_track_point_cov), axis = 1) 
 
+                pred_feature_cubes, \
+                 pred_feature_grid, \
+                  predicted_matched_info = self.dataset_sample.generate_predicted_pnt_feature_cube(predicted_final_track = final_tracks, 
+                                                                                                   known_flight_deptime = self.known_flight_deptime,
+                                                                                                   shift_xleft = 0,
+                                                                                                   shift_xright = 2, 
+                                                                                                   shift_yup = 1,
+                                                                                                   shift_ydown = 1,
+                                                                                                   nx = 20,
+                                                                                                   ny = 20)
+
         # From here, feeds_update will have fixed shapes
         for j in range(max_length - search_power):
-            feeds_update = {self.input_tensor: last_input_track_point,
+            feeds_update = {self.input_tensor: pred_feature_cubes,
                             self.seq_length: [1]*last_input_track_point.shape[0],
                             # self.input_encode_tensor: normalized_flight_plan,
                             # self.seq_len_encode: flight_plan_length,
@@ -659,13 +550,179 @@ class trainRNN:
             # has the shape of [n_seq*n_mixture^(i+1), ?, 4]
             final_tracks_cov = np.concatenate((final_tracks_cov, last_input_track_point_cov), axis = 1) 
 
-        final_tracks = (final_tracks * standard_std) + standard_mu # shape of [n_seq*n_mixture^(i+1), maxLlenth+init_len, 4]
-        final_tracks_cov = final_tracks_cov * (standard_std**2)
+            pred_feature_cubes, \
+                 pred_feature_grid, \
+                  predicted_matched_info = self.dataset_sample.generate_predicted_pnt_feature_cube(predicted_final_track = final_tracks, 
+                                                                                                   known_flight_deptime = self.known_flight_deptime,
+                                                                                                   shift_xleft = 0,
+                                                                                                   shift_xright = 2, 
+                                                                                                   shift_yup = 1,
+                                                                                                   shift_ydown = 1,
+                                                                                                   nx = 20,
+                                                                                                   ny = 20)
 
         if debug:
             with open('debug_file/samp_mu_cov_outer_loop_debug.pkl', 'wb') as f:
                 pickle.dump((state, pi_logprob, coords_logprob, final_tracks), f)
         return final_tracks[:, n_time:, :], final_tracks_cov, buffer_total_logprob, buffer_pi_prob
+
+
+    def arrange_top_k(self, 
+                      top_k_idx_seq, 
+                      keep_search):
+        final_seq = []
+        i = 0
+        for seq in top_k_idx_seq[::-1]:
+            if i == 0:
+                final_seq.append(seq)
+                idx = seq//keep_search
+            else:
+                seq = seq[idx]
+                final_seq.append(seq)
+                idx = seq // keep_search
+            i += 1
+        final_seq = np.array(final_seq)
+        return final_seq
+
+    # def sample_seq(self, 
+    #                start_tracks, 
+    #                standard_mu, 
+    #                standard_std, 
+    #                normalized_flight_plan, 
+    #                flight_plan_length, 
+    #                max_length = 100, 
+    #                beam_search = True, 
+    #                width = 10, 
+    #                weights = 0.1,
+    #                keep_search = 50,
+    #                debug = False):
+    #     # start_tracks should have the shape of [n_sample, n_time, n_input]
+    #     # normalized_flight_plan should have the shape of [n_sample, n_time, n_input] (also flipped)
+    #     # normalized_flight_plan should be (flight_plan - [dep_lat, dep_lon] - fp_mu)/fp_std; and then pad_and_flip
+    #     # for each sample in the start_tracks, it should have the same length
+    #     # flight_plan_length should have the shape of [n_sample]
+    #     start_tracks = (start_tracks - standard_mu)/standard_std
+    #     # fp_tracks = (flight_plan - fp_mu)/fp_std
+    #     n_seq, n_time, _ = start_tracks.shape
+    #     if not beam_search:
+    #         width = 1
+    #         keep_search = 1
+    #     buffer_size = width * keep_search
+
+    #     buffer_track = np.repeat(start_tracks, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 4]; duplicate of seq_1, then seq_2, ...
+    #     buffer_fp = np.repeat(normalized_flight_plan, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 2]; duplicate of seq_1, then seq_2, ...
+    #     buffer_fp_len = np.repeat(flight_plan_length, buffer_size) # shape of [n_seq*buffer_size,]
+    #     buffer_total_logprob = np.zeros(shape = (buffer_size * n_seq, 1), dtype = np.float32) # shape of [n_seq*buffer_size,1]
+
+    #     # # # init_state = np.zeros(shape = (self.n_layer, 2, n_seq, self.state_size))
+    #     # tmp_feed = {
+    #     #              # self.input_tensor: buffer_track,
+    #     #              # self.seq_length: [n_time]*n_seq*buffer_size,
+    #     #              self.input_encode_tensor: buffer_fp,
+    #     #              self.seq_len_encode: buffer_fp_len}
+    #     # encoder_state0 = self.sess.run(self.MODEL.encoder_final_state, feed_dict = tmp_feed) # should have the size of (buffer_size*n_seq) tuples
+        
+    #     feeds = {self.input_tensor: buffer_track,
+    #              self.seq_length: [n_time]*n_seq*buffer_size,
+    #              self.input_encode_tensor: buffer_fp,
+    #              self.seq_len_encode: buffer_fp_len}
+
+    #     state, encoder_state = self.sess.run([self.MODEL.decode_final_state, self.MODEL._initial_state], feed_dict = feeds)
+    #     if debug:
+    #         with open('debug_file/encoder_state_debug.pkl', 'wb') as f:
+    #                 pickle.dump((state, encoder_state), f)
+
+
+    #     last_input_track_point = buffer_track[:, -1, None]   # shape of [n_seq*buffersize, 1, 4]
+
+    #     pi_sample_tensor = tf.multinomial(logits = self.MODEL.pi_layer, num_samples = 1, output_dtype = tf.int32)
+    #     coords_sample_tensor = self.MODEL.MVN_pdf.sample()
+    #     coords_logprob_tensor = self.MODEL.MVN_pdf.log_prob(coords_sample_tensor)
+
+    #     # coords_mu = self.MODEL.mu_layer
+    #     coords_cov_tensor = tf.matmul(self.MODEL.L_layer, self.MODEL.L_layer, transpose_b = True)
+    #     # predicted_tracks = np.repeat(start_tracks, width, axis = 0)
+    #     top_k_idx_seq = []
+    #     all_mus = []
+    #     all_covs = []
+    #     for i in range(max_length):
+    #         # self.MODEL._initial_state = state
+    #         feeds_update = {self.input_tensor: last_input_track_point,
+    #                         self.seq_length: [1]*n_seq*buffer_size,
+    #                         self.input_encode_tensor: buffer_fp,
+    #                         self.seq_len_encode: buffer_fp_len,
+    #                         self.MODEL._initial_state: state}
+    #         if (i == 0) and (debug is True):
+    #             with open('debug_file/init_state_debug.pkl', 'wb') as f:
+    #                 pickle.dump((state), f)
+    #         state, pi_logprob, coords_sample, pi_sample, coords_logprob, coords_mu, coords_cov = self.sess.run([self.MODEL.decode_final_state, 
+    #                                                                                                              tf.log(self.MODEL.pi_layer), 
+    #                                                                                                              coords_sample_tensor, 
+    #                                                                                                              pi_sample_tensor, 
+    #                                                                                                              coords_logprob_tensor,
+    #                                                                                                              self.MODEL.mu_layer,
+    #                                                                                                              coords_cov_tensor], feed_dict = feeds_update)
+    #         # print(pi_sample.flatten()[:5])
+    #         # print(coords_sample[:5, :, :])
+    #         """
+    #         state: tuple with size n_layers, each is a LSTMtuple object; state[0].c.shape = (n_seq*buffersize, 256); state[0].h.shape = (n_seq*buffersize, 256);
+    #         pi_logprob: np array with size (n_seq*buffersize, n_mixture)
+    #         coords_sample: np array with size (n_seq*buffersize, n_mixture, 4)
+    #         pi_sample: np array with size (n_seq * buffersize, 1)
+    #         coords_logprob: np array with size (n_seq*buffersize, n_mixture)
+    #         """
+    #         if (i == 0) and (debug is True):
+    #             with open('debug_file/inner_loop_debug.pkl', 'wb') as f:
+    #                 pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, coords_mu, coords_cov), f)
+
+    #         pi_logprob_sample = pi_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
+    #         coords_logprob_sample = coords_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
+    #         # total_log_prob = np.sum(pi_logprob, axis = 1, keepdims=True) + np.sum(coords_logprob, axis = 1, keepdims=True)
+    #         # buffer_total_logprob += (pi_logprob_sample/np.sum(pi_logprob, axis = 1, keepdims=True) + coords_logprob_sample/np.sum(coords_logprob, axis = 1, keepdims=True)) # has shape of [buffer_size*n_seq, 1]
+    #         buffer_total_logprob += (pi_logprob_sample*weights + coords_logprob_sample*(1-weights))/(0.95**i) # has shape of [buffer_size*n_seq, 1]
+    #         # select top k sequence
+    #         tmp_buffer_total_logprob = buffer_total_logprob.reshape(n_seq, buffer_size, 1)
+    #         top_k_idx = np.argsort(tmp_buffer_total_logprob, axis = 1)[:, (-width):,:] + (np.repeat(range(n_seq), width)*buffer_size).reshape(n_seq, width, 1)
+    #         top_k_idx = top_k_idx.reshape(-1)
+    #         top_k_idx_seq.append(top_k_idx)
+
+    #         top_k_logprob = buffer_total_logprob[top_k_idx]
+    #         selected_coords = coords_sample[top_k_idx, pi_sample[top_k_idx].flatten(), None] # shape of [width*n_seq, 1, 4]
+    #         selected_coords_mu = coords_mu[top_k_idx, pi_sample[top_k_idx].flatten(), None] # shape of [width*n_seq, 1, 4]
+    #         selected_coords_cov = coords_cov[top_k_idx, pi_sample[top_k_idx].flatten(), :] # shape of [width*n_seq, 1, 2, 2]
+            
+    #         state = tuple([tf.nn.rnn_cell.LSTMStateTuple(c = np.repeat(tmp_state.c[top_k_idx], keep_search, axis = 0), 
+    #                                                      h = np.repeat(tmp_state.h[top_k_idx], keep_search, axis = 0)) for tmp_state in state])
+            
+    #         last_input_track_point = np.repeat(selected_coords, keep_search, axis = 0) # shape of [n_seq*buffersize, 1, 4]
+    #         buffer_total_logprob = np.repeat(top_k_logprob, keep_search, axis = 0)
+    #         # last_input_track_point = param_sample[range(buffer_size*n_seq), pi_sample.flatten()].reshape(n_seq, 1, -1)
+    #         buffer_track = np.concatenate((buffer_track, last_input_track_point), axis = 1)
+
+    #         all_mus.append(np.repeat(selected_coords_mu, keep_search, axis = 0))
+    #         all_covs.append(np.repeat(selected_coords_cov, keep_search, axis = 0))
+
+    #     all_mus = np.array(all_mus)
+    #     all_covs = np.array(all_covs)
+    #     all_mus = all_mus * standard_std + standard_mu # shape of [max_length, n_seq*width, 1, 4]
+    #     all_covs = all_covs * (standard_std**2) # shape of [max_length, n_seq*width, 1, 4, 4]
+    
+    #     top_k_idx_seq = np.array(top_k_idx_seq) # shape of [max_length, n_seq*width]
+    #     final_tracks = (buffer_track * standard_std) + standard_mu # shape of [n_seq*buffersize, maxLlenth+init_len, 4]
+
+    #     final_top_k_idx_seq = self.arrange_top_k(top_k_idx_seq, keep_search) # shape of [max_lenth, n_seq*width]
+    #     final_tracks = final_tracks[final_top_k_idx_seq[::-1].T, range(n_time, max_length + n_time)]  # shape of [n_seq*width, max_length, 4]
+
+    #     a = np.transpose(all_covs, [1, 0, 2, 3])
+    #     b = np.transpose(all_mus, [1, 0, 2,3])
+    #     final_covs = a[final_top_k_idx_seq[::-1].T, range(max_length)]
+    #     final_mus = b[final_top_k_idx_seq[::-1].T, range(max_length)].reshape(n_seq*width, max_length, -1)
+
+    #     if debug:
+    #         with open('debug_file/outer_loop_debug.pkl', 'wb') as f:
+    #             pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, final_tracks, top_k_idx_seq, buffer_total_logprob, all_mus, all_covs), f)
+    #     return final_tracks, final_top_k_idx_seq, buffer_total_logprob, final_mus, final_covs
+
 
 
     # def sample_seq_kalman_filter_greedy(self, 
@@ -793,7 +850,7 @@ if __name__ == '__main__':
     @click.option('--train_from_model', type=bool, default=False, help='train from restored model')
 
     # for prediction
-    @click.option('--test_data', default='../data/test/test_data.csv', help='test data path')
+    @click.option('--test_data', default='../../DATA/DeepTP/', help='test data path') # not useful for now
 
     # Train RNN model using a given configuration file
     def main(config='configs/encoder_decoder_nn.ini',
@@ -801,10 +858,19 @@ if __name__ == '__main__':
              train_from_model = False,
              train_or_predict = 'train',
              test_data = '../data/test_data.csv'):
+        # create the Tf_train_ctc class
+        if train_or_predict == 'train':
+            tmpBinary = True
+        elif train_or_predict == 'predict':
+            tmpBinary = False
+        else:
+            raise ValueError('train_or_predict not valid')
+
         try:        
             os.mkdir('log')     
         except:     
             pass
+
         log_name = '{}_{}_{}'.format('log/log', train_or_predict, time.strftime("%Y%m%d-%H%M%S"))
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
@@ -816,13 +882,7 @@ if __name__ == '__main__':
         consoleHandler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
         logger.addHandler(consoleHandler)
 
-        # create the Tf_train_ctc class
-        if train_or_predict == 'train':
-            tmpBinary = True
-        elif train_or_predict == 'predict':
-            tmpBinary = False
-        else:
-            raise ValueError('train_or_predict not valid')
+        
         tf_train = trainRNN(conf_path=config,
                             model_name=name, 
                             sample_traj = not tmpBinary)

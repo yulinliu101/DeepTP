@@ -179,7 +179,7 @@ class DatasetEncoderDecoder:
         return batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes
             
 from utils_features import match_wind_fname, match_ncwf_fname, flight_track_feature_generator, proxilvl
-from utils import g
+from utils import g, baseline_time
 class DatasetSample(flight_track_feature_generator):
         
     def __init__(self,
@@ -187,6 +187,8 @@ class DatasetSample(flight_track_feature_generator):
                  train_track_std,
                  train_fp_mean,
                  train_fp_std,
+                 feature_cubes_mean, 
+                 feature_cubes_std,
                  ncwf_data_rootdir = '../../DATA/NCWF/gridded_storm_hourly/',
                  test_track_dir = '../../DATA/DeepTP/test_flight_tracks.csv',
                  test_fp_dir = '../../DATA/DeepTP/test_flight_plans.csv',
@@ -202,6 +204,8 @@ class DatasetSample(flight_track_feature_generator):
         self.train_track_std = train_track_std
         self.train_fp_mean = train_fp_mean
         self.train_fp_std = train_fp_std
+        self.train_feature_cubes_mean = feature_cubes_mean
+        self.train_feature_cubes_std = feature_cubes_std
         self.ncwf_data_rootdir = ncwf_data_rootdir
 
         self.dep_lat = kwargs.get('dep_lat', 29.98333333)
@@ -231,7 +235,7 @@ class DatasetSample(flight_track_feature_generator):
 
         # subtract depature's lat lon & course
         # normalize tracks using train mean and train std
-        tracks = (tracks - np.array([self.dep_lat, self.dep_lon, 0, 0, 0, self.direct_course]) - self.train_track_mean)/self.train_track_std
+        tracks = self.normalize_flight_tracks(tracks)
 
         seq_length = flight_tracks.groupby('FID').Lat.count().values.astype(np.int32)
         tracks_split = np.split(tracks, np.cumsum(seq_length))[:-1]
@@ -249,6 +253,17 @@ class DatasetSample(flight_track_feature_generator):
 
 
         return fp_tracks_split, tracks_split, fp_seq_length, seq_length, flight_tracks
+
+    def normalize_flight_tracks(self, 
+                                unnormalized_tracks):
+        return (unnormalized_tracks - np.array([self.dep_lat, self.dep_lon, 0, 0, 0, self.direct_course]) - self.train_track_mean)/self.train_track_std
+    def unnormalize_flight_tracks(self,
+                                  normalized_tracks):
+        return normalized_tracks * self.train_track_std + self.train_track_mean + np.array([self.dep_lat, self.dep_lon, 0, 0, 0, self.direct_course])
+
+    def normalize_feature_cubes(self,
+                                unnormalized_feature_cubes):
+        return (unnormalized_feature_cubes - self.train_feature_cubes_mean)/self.train_feature_cubes_std
 
 
     # @Override parent method _generate_feature_cube
@@ -334,6 +349,7 @@ class DatasetSample(flight_track_feature_generator):
         
         return feature_cubes
 
+
     def _load_ncwf_low_memory(self, ncwf_fname):
         return np.load(os.path.join(self.ncwf_data_rootdir, ncwf_fname))['ncwf_arr']
 
@@ -352,13 +368,13 @@ class DatasetSample(flight_track_feature_generator):
                                                                             shift_ydown = shift_ydown,
                                                                             nx  = nx,
                                                                             ny = ny)
-
+        feature_cubes = self.normalize_feature_cubes(feature_cubes)
 
         return feature_cubes, feature_grid, query_idx
 
-
     def generate_predicted_pnt_feature_cube(self,
                                             predicted_final_track,
+                                            known_flight_deptime,
                                             shift_xleft = 0,
                                             shift_xright = 2,
                                             shift_yup = 1,
@@ -368,8 +384,8 @@ class DatasetSample(flight_track_feature_generator):
         """
         predicted_final_track has the shape of [n_seq * n_mixture^i, n_time + t, n_input].
             The last axis coresponds to [Lat, Lon, Alt, cumDT, Speed, course]
-        known_flight_tracks_info is a dataframe that contains
-            FID, Elap_Time (depature time), wind_fname, and wx_fname.
+        known_flight_deptime is a np array that contains
+            FID, Elap_Time (depature time)
         wind_file_info is a dictionary of file time tree (kdtree) and an array of time objects
 
         """
@@ -379,9 +395,10 @@ class DatasetSample(flight_track_feature_generator):
                             predicted_final_track[:, -1, 0])[0]
         # Step 0: construct tmp matching dataframe that contains:
         #    elap_time_diff, azimuth, levels, wx_alt, wind_fname, wx_fname
-        predicted_matched_info = np.empty((predicted_final_track.shape[0], 5))
+        predicted_matched_info = np.empty((predicted_final_track.shape[0], 13))
         predicted_matched_info = pd.DataFrame(predicted_matched_info, 
-                                              columns = ['Lat', 
+                                              columns = ['FID',
+                                                         'Lat', 
                                                          'Lon', 
                                                          'Alt', 
                                                          'cumDT', 
@@ -394,11 +411,25 @@ class DatasetSample(flight_track_feature_generator):
                                                          'wind_fname', 
                                                          'wx_fname'])
 
-        predicted_matched_info.loc[:, ['Lat', 'Lon', 'Alt', 'cumDT', 'Speed', 'course']] = predicted_final_track[:, -1, :]
-        predicted_matched_info.loc[:, ['azimuth']] = azimuth_arr * np.pi/180
+        predicted_matched_info.loc[:, ['Lat', 
+                                       'Lon', 
+                                       'Alt', 
+                                       'cumDT', 
+                                       'Speed', 
+                                       'course']] = self.unnormalize_flight_tracks(predicted_final_track[:, -1, :])
+
+        predicted_matched_info.loc[:, 'azimuth'] = azimuth_arr * np.pi/180
+        
         # Step 1: map cumDT to Elaps_time
-        elap_time_diff = predicted_matched_info.loc[:, 'cumDT'] - np.repeat(TODO)
-        predicted_matched_info.loc[:, ['Elap_Time_Diff']] = elap_time_diff
+        known_flight_deptime_diff = (known_flight_deptime[:, 1] - baseline_time)
+        known_flight_deptime_diff = np.array([item.total_seconds() for item in known_flight_deptime_diff])
+        multiplier = predicted_matched_info.shape[0]//known_flight_deptime_diff.shape[0]
+        deptime = np.repeat(known_flight_deptime_diff, repeats = multiplier, axis = 0)
+        FIDs =  np.repeat(known_flight_deptime[:, 0], repeats = multiplier, axis = 0)
+
+        elap_time_diff = predicted_matched_info.loc[:, 'cumDT'].values + deptime
+        predicted_matched_info.loc[:, 'Elap_Time_Diff'] = elap_time_diff
+        predicted_matched_info.loc[:, 'FID'] = FIDs
         
         # Step 2: Map Elaps_time with wx_fname and wind_fname
         # match with wind/ temperature fname
@@ -408,7 +439,7 @@ class DatasetSample(flight_track_feature_generator):
         predicted_matched_info.loc[~wind_valid_query, 'wind_fname'] = np.nan
 
         # match with ncwf idx
-        wx_query_dist, wx_query_idx = self.wx_ftime_tree.query(elap_time_diff.reshape(-1, 1), p = 1, distance_upper_bound = 3600*3)
+        wx_query_dist, wx_query_idx = self.wx_ftime_tree.query(elap_time_diff.reshape(-1, 1), p = 1, distance_upper_bound = 3600)
         wx_valid_query = wx_query_dist < self.wx_fname_hourly.shape[0] # binary array
         predicted_matched_info.loc[wx_valid_query, 'wx_fname'] = self.wx_fname_hourly[wx_query_idx[wx_valid_query]]
         predicted_matched_info.loc[~wx_valid_query, 'wx_fname'] = np.nan
@@ -418,20 +449,31 @@ class DatasetSample(flight_track_feature_generator):
         predicted_matched_info.loc[:, 'wx_alt'] = predicted_matched_info['Alt']//10
 
         # Step 4: generate feature cube
-        feature_cubes, feature_grid, query_idx = self.feature_arr_generator(flight_tracks = flight_tracks,
-                                                                            shift_xleft = shift_xleft,
-                                                                            shift_xright = shift_xright,
-                                                                            shift_yup = shift_yup,
-                                                                            shift_ydown = shift_ydown,
-                                                                            nx  = nx,
-                                                                            ny = ny)
+        feature_cubes, feature_grid, _ = self.feature_arr_generator(flight_tracks = predicted_matched_info,
+                                                                    shift_xleft = shift_xleft,
+                                                                    shift_xright = shift_xright,
+                                                                    shift_yup = shift_yup,
+                                                                    shift_ydown = shift_ydown,
+                                                                    nx  = nx,
+                                                                    ny = ny)
+        feature_cubes = self.normalize_feature_cubes(feature_cubes)
+        feature_cubes = feature_cubes.reshape(-1, 1, nx, ny, 4)
         
-        return feature_cubes, feature_grid
+        return feature_cubes, feature_grid, predicted_matched_info
+
+    def reshape_feature_cubes(self, 
+                              feature_cubes,
+                              track_length):
+        # track_length should be a list of integers that contains the length of each test track
+
+        feature_cubes = np.array(np.split(feature_cubes, np.cumsum(track_length))[:-1])
+
+        return feature_cubes
 
 def _pad(inputs, inputs_len):
     # inputs is a list of np arrays
     # inputs_len is a np array
-    _zero_placeholder = ((0,0),) * (len(inputs[0].shape)-1)
+    _zero_placeholder = ((0,0),) * (len(inputs[0].shape) - 1)
     max_len = inputs_len.max()
     _inputs = []
     i = 0
