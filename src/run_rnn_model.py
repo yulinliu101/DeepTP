@@ -222,7 +222,7 @@ class trainRNN:
                                                                        standard_std = self.cpu_dataset.data_std, 
                                                                        normalized_flight_plan = fp_tracks_split, 
                                                                        flight_plan_length = fp_seq_length,
-                                                                       max_length = 70, 
+                                                                       max_length = 100, 
                                                                        search_power = search_power,
                                                                        weights = weights,
                                                                        debug = debug)
@@ -503,6 +503,7 @@ class trainRNN:
 
     def sample_seq_mu_cov(self, 
                           start_tracks, # normalized
+                          start_tracks_feature_cubes, # normalized
                           # standard_mu, 
                           # standard_std, 
                           normalized_flight_plan, 
@@ -569,23 +570,26 @@ class trainRNN:
                                                                                      self.MODEL.mu_layer,
                                                                                      coords_cov_tensor], feed_dict = feeds_update)
             if i == 0:
+                # only select the last element (last time stamp)
                 pi_logprob = pi_logprob[range(n_time - 1, n_time*n_seq, n_time), :]
                 coords_logprob = coords_logprob[range(n_time - 1, n_time*n_seq, n_time), :]
                 coords_mu = coords_mu[range(n_time - 1, n_time*n_seq, n_time), :, :]
                 coords_cov = coords_cov[range(n_time - 1, n_time*n_seq, n_time), :, :, :]
             """
-            state: tuple with size n_layers, each is a LSTMtuple object; state[i].c.shape = (n_seq*n_mixture^i, 256); state[i].h.shape = (n_seq*n_mixture^i, 256);
+            state: tuple with size n_layers, each is a LSTMtuple object; 
+                state[i].c.shape = (n_seq*n_mixture^i, 256); 
+                state[i].h.shape = (n_seq*n_mixture^i, 256);
             pi_logprob: np array with size (n_seq*n_mixture^i, n_mixture)
-            coords_mu: np array with size (n_seq*n_mixture^i, n_mixture, 4)
-            coords_cov: np array with size (n_seq*n_mixture^i, n_mixture, 4, 4)
+            coords_mu: np array with size (n_seq*n_mixture^i, n_mixture, n_input)
+            coords_cov: np array with size (n_seq*n_mixture^i, n_mixture, n_input, n_input)
             coords_logprob: np array with size (n_seq*n_mixture^i, n_mixture)
             """
             if (i == search_power - 1) and (debug is True):
                 with open('debug_file/samp_mu_cov_inner_loop1_debug.pkl', 'wb') as f:
                     pickle.dump((state, pi_logprob, coords_logprob, coords_mu, coords_cov), f)
 
-            last_input_track_point = coords_mu.reshape(coords_mu.shape[0]*coords_mu.shape[1], 1, -1) # shape of [n_seq*n_mixture^(i+1), 1, 4]
-            last_input_track_point_cov = coords_cov.reshape(-1, 1, coords_cov.shape[2], coords_cov.shape[3]) # shape of [n_seq*n_mixture^(i+1), 4, 4]
+            last_input_track_point = coords_mu.reshape(coords_mu.shape[0]*coords_mu.shape[1], 1, -1) # shape of [n_seq*n_mixture^(i+1), 1, n_input]
+            last_input_track_point_cov = coords_cov.reshape(-1, 1, coords_cov.shape[2], coords_cov.shape[3]) # shape of [n_seq*n_mixture^(i+1), n_input, n_input]
             # flight_plan_length = np.repeat(flight_plan_length, self.n_mixture)
             # normalized_flight_plan = TODO
             state = tuple([tf.nn.rnn_cell.LSTMStateTuple(c = np.repeat(tmp_state.c, self.n_mixture, axis = 0), 

@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-16 14:51:38
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-09-22 19:01:56
+# @Last Modified time: 2018-10-01 22:24:27
 
 # api functions that are mostly called by other paks
 
@@ -16,7 +16,7 @@ from mpl_toolkits.basemap import Basemap
 
 global baseline_time
 baseline_time = parser.parse('01/01/2013 0:0:0')
-g=Geod(ellps='WGS84')
+g = Geod(ellps='WGS84')
 # reference:
 # http://hanj.cs.illinois.edu/pdf/sigmod07_jglee.pdf
 # Lee, Han and Whang (2007) trajectory clustering a partition-and-group framework

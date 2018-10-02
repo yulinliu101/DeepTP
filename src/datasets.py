@@ -36,13 +36,14 @@ class DatasetEncoderDecoder:
         self.idx = kwargs.get('idx', 0)
 
         self.all_tracks, \
-            self.all_seq_lens, \
-                self.data_mean, \
-                    self.data_std, \
-                        self.all_FP_tracks, \
-                            self.all_seq_lens_FP, \
-                                self.FP_mean, \
-                                    self.FP_std = self.load_track_data()
+         self.all_seq_lens, \
+          self.data_mean, \
+           self.data_std, \
+            self.all_FP_tracks, \
+             self.all_seq_lens_FP, \
+              self.FP_mean, \
+               self.FP_std, \
+                self.tracks_time_id_info = self.load_track_data()
 
         self.feature_cubes, self.feature_cubes_mean, self.feature_cubes_std = self.load_feature_cubes()
         self.feature_cubes = np.split(self.feature_cubes, np.cumsum(self.all_seq_lens))[:-1]
@@ -52,12 +53,14 @@ class DatasetEncoderDecoder:
               self.all_seq_lens, \
                 self.all_FP_tracks, \
                   self.all_seq_lens_FP, \
-                    self.feature_cubes = shuffle(self.all_tracks, 
-                                                 self.all_seq_lens, 
-                                                 self.all_FP_tracks, 
-                                                 self.all_seq_lens_FP, 
-                                                 self.feature_cubes,
-                                                 random_state = 101)
+                    self.feature_cubes, \
+                      self.tracks_time_id_info = shuffle(self.all_tracks, 
+                                                         self.all_seq_lens, 
+                                                         self.all_FP_tracks, 
+                                                         self.all_seq_lens_FP, 
+                                                         self.feature_cubes,
+                                                         self.tracks_time_id_info,
+                                                         random_state = 101)
 
         if self.split:
             self.train_tracks, \
@@ -69,14 +72,17 @@ class DatasetEncoderDecoder:
                   self.train_seq_lens_FP, \
                    self.dev_seq_lens_FP, \
                     self.train_feature_cubes, \
-                     self.dev_feature_cubes = train_test_split(self.all_tracks, 
-                                                               self.all_seq_lens, 
-                                                               self.all_FP_tracks,
-                                                               self.all_seq_lens_FP,
-                                                               self.feature_cubes,
-                                                               random_state = 101, 
-                                                               train_size = 0.8,
-                                                               test_size = None)
+                     self.dev_feature_cubes, \
+                      self.train_tracks_time_id_info, \
+                       self.dev_tracks_time_id_info = train_test_split(self.all_tracks, 
+                                                                       self.all_seq_lens, 
+                                                                       self.all_FP_tracks,
+                                                                       self.all_seq_lens_FP,
+                                                                       self.feature_cubes,
+                                                                       self.tracks_time_id_info,
+                                                                       random_state = 101, 
+                                                                       train_size = 0.8,
+                                                                       test_size = None)
 
         self.train_tracks = _pad(self.train_tracks, self.train_seq_lens)
         self.train_feature_cubes = _pad(self.train_feature_cubes, self.train_seq_lens)
@@ -85,7 +91,7 @@ class DatasetEncoderDecoder:
         return 'Dataset Class to Conduct Training Procedure'
 
     def load_track_data(self):
-        track_data = pd.read_csv(self.actual_track_datapath, header = 0, usecols = [1, 8, 9, 10, 13, 15, 19], index_col = 0)
+        track_data = pd.read_csv(self.actual_track_datapath, header = 0, usecols = [1, 7, 8, 9, 10, 13, 15, 19], index_col = 0)
         # FID, Lat, Lon, Alt, DT, Speed (nmi/sec), course
         FP_track = pd.read_csv(self.flight_plan_datapath)
         FP_utlize = pd.read_csv(self.flight_plan_utilize_datapath, header = 0, usecols = [19,1])
@@ -111,20 +117,23 @@ class DatasetEncoderDecoder:
         tracks = track_data_with_FP[['Lat', 'Lon', 'Alt', 'cumDT', 'Speed', 'course']].values.astype(np.float32)
         
         # use delta lat and delta lon
-        tracks = tracks - np.array([self.dep_lat, self.dep_lon, 0, 0, 0, 0])
+        tracks = tracks - np.array([self.dep_lat, self.dep_lon, 0, 0, 0, self.direct_course])
         avg = tracks.mean(axis = 0)
         std_err = tracks.std(axis = 0)
         tracks = (tracks - avg)/std_err
         tracks_split = np.split(tracks, np.cumsum(seq_length_tracks))[:-1]
 
-        FP_track_order = track_data_with_FP.groupby('FID')[['FP_tracks', 'seq_len']].head(1)
+        FP_track_order = track_data_with_FP.groupby('FID')[['FID', 'Elap_Time', 'FP_tracks', 'seq_len']].head(1)
         seq_length_FP = FP_track_order.seq_len.values.astype(np.int32)
         FP_tracks_split = FP_track_order.FP_tracks.values
+
+        FP_track_order['Elap_Time'] = pd.to_datetime(FP_track_order['Elap_Time'], errors = 'coerce')
+        tracks_time_id_info = FP_track_order[['FID', 'Elap_Time']].values
 
         FP_tracks_split = _pad_and_flip_FP(FP_tracks_split, seq_length_FP)
 
         # all standardized
-        return tracks_split, seq_length_tracks, avg, std_err, FP_tracks_split, seq_length_FP, avg_FP, std_err_FP
+        return tracks_split, seq_length_tracks, avg, std_err, FP_tracks_split, seq_length_FP, avg_FP, std_err_FP, tracks_time_id_info
 
     def load_feature_cubes(self):
         # return np.ones((150000, 4, 20, 20)), np.ones((4, 20, 20)), np.ones((4, 20,20))
@@ -169,34 +178,10 @@ class DatasetEncoderDecoder:
         batch_targets = None
         return batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes
             
-
-def _pad(inputs, inputs_len):
-    # inputs is a list of np arrays
-    # inputs_len is a np array
-    _zero_placeholder = ((0,0),) * (len(inputs[0].shape)-1)
-    max_len = inputs_len.max()
-    _inputs = []
-    i = 0
-    for _input in inputs:
-        _tmp_zeros = ((0, max_len - inputs_len[i]), *_zero_placeholder)
-        _inputs.append(np.pad(_input, _tmp_zeros, 'constant', constant_values = 0))
-        i+=1
-    return np.asarray(_inputs)
-
-def _pad_and_flip_FP(inputs, inputs_len):
-    # reverse every flight plan
-    max_len = inputs_len.max()
-    _inputs = []
-    i = 0
-    for _input in inputs:
-        _inputs.append(np.pad(_input.reshape(-1,2)[::-1], ((0, max_len - inputs_len[i]), (0,0)), 'constant', constant_values = 0))
-        i+=1
-    return np.asarray(_inputs)
-
-
-
-from utils_features import match_wind_fname, match_ncwf_fname, flight_track_feature_generator
+from utils_features import match_wind_fname, match_ncwf_fname, flight_track_feature_generator, proxilvl
+from utils import g
 class DatasetSample(flight_track_feature_generator):
+        
     def __init__(self,
                  train_track_mean,
                  train_track_std,
@@ -287,14 +272,20 @@ class DatasetSample(flight_track_feature_generator):
 
         #######################################################################################################
         self.wx_testdata_holder = []
+        self.wx_gpidx_holder = []
         # append all weather data into one so that later matching will be more efficient
         groups = flight_tracks[['FID', 'wx_fname', 'wx_alt']].groupby(['wx_fname', 'wx_alt'])
         ng = groups.ngroups
 
         print('Extract ncwf convective weather from %d groups ...'%ng)
         for gpidx, gp in groups:
-            wx_data_single = self._load_ncwf_low_memory(gpidx[0])
-            self.wx_testdata_holder.append(wx_data_single) # each element is the ncwf array with the order of wx_fname
+            if gpidx[0] not in self.wx_gpidx_holder:
+                self.wx_gpidx_holder.append(gpidx[0])
+                wx_data_single = self._load_ncwf_low_memory(gpidx[0])
+                self.wx_testdata_holder.append(wx_data_single) # each element is the ncwf array with the order of wx_fname
+            else:
+                wx_data_single = self.wx_testdata_holder[self.wx_gpidx_holder.index(gpidx[0])]
+            
             # nan has been automatically dropped
             wx_alt_cover = self.wx_unique_alt[(self.wx_unique_alt >= (gpidx[1] - wx_alt_buffer)) & \
                                               (self.wx_unique_alt <= (gpidx[1] + wx_alt_buffer))]
@@ -310,6 +301,8 @@ class DatasetSample(flight_track_feature_generator):
         self.uwind_testdata_holder = []
         self.vwind_testdata_holder = []
         self.tempr_testdata_holder = []
+
+        self.wind_gpidx_holder = []
         print('Extract wind/ temperature from %d groups ...'%ng)
         jj = -1
         for gpidx, gp in groups:
@@ -318,11 +311,16 @@ class DatasetSample(flight_track_feature_generator):
             # tmp_uwind = wind_npz['uwind']
             # tmp_vwind = wind_npz['vwind']
             # tmp_tempr = wind_npz['tempr']
-            tmp_uwind, tmp_vwind, tmp_tempr = self._load_wind_low_memory(gpidx[0])
-
-            self.uwind_testdata_holder.append(tmp_uwind)
-            self.vwind_testdata_holder.append(tmp_vwind)
-            self.tempr_testdata_holder.append(tmp_tempr)
+            if gpidx[0] not in self.wind_gpidx_holder:
+                self.wind_gpidx_holder.append(gpidx[0])
+                tmp_uwind, tmp_vwind, tmp_tempr = self._load_wind_low_memory(gpidx[0])
+                self.uwind_testdata_holder.append(tmp_uwind)
+                self.vwind_testdata_holder.append(tmp_vwind)
+                self.tempr_testdata_holder.append(tmp_tempr)
+            else:
+                tmp_uwind = self.uwind_testdata_holder[self.wind_gpidx_holder.index(gpidx[0])]
+                tmp_vwind = self.vwind_testdata_holder[self.wind_gpidx_holder.index(gpidx[0])]
+                tmp_tempr = self.tempr_testdata_holder[self.wind_gpidx_holder.index(gpidx[0])]
 
             uwind_base = tmp_uwind[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
             vwind_base = tmp_vwind[self.lvls_dict[gpidx[1]]][feature_grid_query_idx[gp.index]].reshape(-1, nx,ny)
@@ -358,9 +356,9 @@ class DatasetSample(flight_track_feature_generator):
 
         return feature_cubes, feature_grid, query_idx
 
-    def generate_predicted_pnt_feature_cube(self, 
-                                            predicted_point,
-                                            known_flight_tracks,
+
+    def generate_predicted_pnt_feature_cube(self,
+                                            predicted_final_track,
                                             shift_xleft = 0,
                                             shift_xright = 2,
                                             shift_yup = 1,
@@ -368,162 +366,87 @@ class DatasetSample(flight_track_feature_generator):
                                             nx = 20,
                                             ny = 20):
         """
-        predicted_point has the form of [Lat, Lon, Alt, cumDT, Speed, course], and the shape should be: [?]
+        predicted_final_track has the shape of [n_seq * n_mixture^i, n_time + t, n_input].
+            The last axis coresponds to [Lat, Lon, Alt, cumDT, Speed, course]
+        known_flight_tracks_info is a dataframe that contains
+            FID, Elap_Time (depature time), wind_fname, and wx_fname.
+        wind_file_info is a dictionary of file time tree (kdtree) and an array of time objects
+
         """
+        azimuth_arr = g.inv(predicted_final_track[:, -2, 1],
+                            predicted_final_track[:, -2, 0],
+                            predicted_final_track[:, -1, 1],
+                            predicted_final_track[:, -1, 0])[0]
+        # Step 0: construct tmp matching dataframe that contains:
+        #    elap_time_diff, azimuth, levels, wx_alt, wind_fname, wx_fname
+        predicted_matched_info = np.empty((predicted_final_track.shape[0], 5))
+        predicted_matched_info = pd.DataFrame(predicted_matched_info, 
+                                              columns = ['Lat', 
+                                                         'Lon', 
+                                                         'Alt', 
+                                                         'cumDT', 
+                                                         'Speed', 
+                                                         'course',
+                                                         'Elap_Time_Diff', 
+                                                         'azimuth', 
+                                                         'levels', 
+                                                         'wx_alt', 
+                                                         'wind_fname', 
+                                                         'wx_fname'])
 
-
+        predicted_matched_info.loc[:, ['Lat', 'Lon', 'Alt', 'cumDT', 'Speed', 'course']] = predicted_final_track[:, -1, :]
+        predicted_matched_info.loc[:, ['azimuth']] = azimuth_arr * np.pi/180
         # Step 1: map cumDT to Elaps_time
+        elap_time_diff = predicted_matched_info.loc[:, 'cumDT'] - np.repeat(TODO)
+        predicted_matched_info.loc[:, ['Elap_Time_Diff']] = elap_time_diff
+        
+        # Step 2: Map Elaps_time with wx_fname and wind_fname
+        # match with wind/ temperature fname
+        wind_query_dist, wind_query_idx = self.wind_ftime_tree.query(elap_time_diff.reshape(-1, 1), p = 1, distance_upper_bound = 3600*3)
+        wind_valid_query = wind_query_dist < self.wind_time_objs.shape[0] # binary array
+        predicted_matched_info.loc[wind_valid_query, 'wind_fname'] = self.wind_time_objs[wind_query_idx[wind_valid_query], 0]
+        predicted_matched_info.loc[~wind_valid_query, 'wind_fname'] = np.nan
 
-        # Step 2: calculate azimuth
+        # match with ncwf idx
+        wx_query_dist, wx_query_idx = self.wx_ftime_tree.query(elap_time_diff.reshape(-1, 1), p = 1, distance_upper_bound = 3600*3)
+        wx_valid_query = wx_query_dist < self.wx_fname_hourly.shape[0] # binary array
+        predicted_matched_info.loc[wx_valid_query, 'wx_fname'] = self.wx_fname_hourly[wx_query_idx[wx_valid_query]]
+        predicted_matched_info.loc[~wx_valid_query, 'wx_fname'] = np.nan
 
-
-        # Step 3: Map Elaps_time with wx_fname and wind_fname
-
+        # Step 3: calculate wind_levels & ncwf_levels
+        predicted_matched_info.loc[:, 'levels'] = predicted_matched_info['Alt'].apply(lambda x: proxilvl(x*100, self.lvls_dict))
+        predicted_matched_info.loc[:, 'wx_alt'] = predicted_matched_info['Alt']//10
 
         # Step 4: generate feature cube
-        TODO
-
-        return
-
-
-
-
-
-
-
-
-
-
-# class Dataset:
-#     def __init__(self,
-#                  data_path,
-#                  shuffle_or_not = True,
-#                  split = True,
-#                  batch_size = 128,
-#                  **kwargs):
-#         self.data_path = data_path
-#         self.shuffle_or_not = shuffle_or_not
-#         self.split = split
-#         self.batch_size = batch_size
-#         self.idx = kwargs.get('idx', 0)
-
-#         self.all_tracks, self.all_seq_lens, self.data_mean, self.data_std = self.load_data()
-
-#         if self.shuffle_or_not:
-#             self.all_tracks, self.all_seq_lens = shuffle(self.all_tracks, self.all_seq_lens, random_state = 101)
-#         if self.split:
-#             self.train_tracks, self.dev_tracks, self.train_seq_lens, self.dev_seq_lens = train_test_split(self.all_tracks, 
-#                                                                                                           self.all_seq_lens, 
-#                                                                                                           random_state = 101, 
-#                                                                                                           train_size = 0.8)
-
-#         self.train_tracks = _pad(self.train_tracks, self.train_seq_lens)
-#         self.n_train_data_set = self.train_tracks.shape[0]
+        feature_cubes, feature_grid, query_idx = self.feature_arr_generator(flight_tracks = flight_tracks,
+                                                                            shift_xleft = shift_xleft,
+                                                                            shift_xright = shift_xright,
+                                                                            shift_yup = shift_yup,
+                                                                            shift_ydown = shift_ydown,
+                                                                            nx  = nx,
+                                                                            ny = ny)
         
+        return feature_cubes, feature_grid
 
-#     def load_data(self):
-#         track_data = pd.read_csv(self.data_path, header = 0, usecols = [0, 7, 8, 9, 12])
-#         seq_length = track_data.groupby('FID').Lat.count().values.astype(np.int32)
-#         tracks = track_data[['Lat', 'Lon', 'Alt', 'DT']].values.astype(np.float32)
-#         avg = tracks.mean(axis = 0)
-#         std_err = tracks.std(axis = 0)
-#         tracks = (tracks - avg)/std_err
-#         tracks_split = np.split(tracks, np.cumsum(seq_length))[:-1]
+def _pad(inputs, inputs_len):
+    # inputs is a list of np arrays
+    # inputs_len is a np array
+    _zero_placeholder = ((0,0),) * (len(inputs[0].shape)-1)
+    max_len = inputs_len.max()
+    _inputs = []
+    i = 0
+    for _input in inputs:
+        _tmp_zeros = ((0, max_len - inputs_len[i]), *_zero_placeholder)
+        _inputs.append(np.pad(_input, _tmp_zeros, 'constant', constant_values = 0))
+        i+=1
+    return np.asarray(_inputs)
 
-#         return tracks_split, seq_length, avg, std_err
-
-#     def next_batch(self):
-#         n_sample = self.n_train_data_set
-#         train_dev_test = 'train'
-#         if self.idx >= n_sample:
-#             self.idx = 0
-#             if self.shuffle_or_not:
-#                 self.train_tracks, self.train_seq_lens = shuffle(self.train_tracks, self.train_seq_lens)
-#         if train_dev_test == 'train':
-#             endidx = min(self.idx + self.batch_size, self.n_train_data_set)
-#             batch_seq_lens = self.train_seq_lens[self.idx:endidx]
-#             batch_inputs = self.train_tracks[self.idx:endidx, :, :]
-            
-#         batch_targets = None
-#         return batch_inputs, batch_targets, batch_seq_lens
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# class dataset:
-#     def __init__(data_path, 
-#                  model = 'rnn',
-#                  data_source = 'pickle',
-#                  shuffle = True,
-#                  **kwargs):
-#         self.data_path = data_path
-#         self.data_source = data_source
-#         self.shuffle = shuffle
-#         self.idx = kwargs.get('idx', 0)
-
-#         if self.data_source == 'pickle':
-#             self.train_inputs = self.load_data_from_pickle()
-#         elif self.data_source == 'zip':
-#             self.train_inputs = self.load_data_from_pickle()
-
-#     def load_data_from_zip(self):
-            
-#         with zipfile(data_path, 'r') as data_file:
-#             for fname in data_file.namelist():
-#                 img_data = pickle.load(data_file.read(fname))
-
-#     def load_data_from_pickle(self):
-#         try:
-#             all_img_data = pickle.load(open(data_path, 'rb'))
-#         except:
-#             all_img_data = pickle.load(open(data_path, 'rb'), protocal = 2, encoding = 'latin1')
-
-#         if self.model == 'autoencoder':
-#             return all_img_data, None
-#         elif self.model == 'convnet':
-#             try:
-#                 all_label = pickle.load(open(data_path, 'rb'))
-#             except:
-#                 all_label = pickle.load(open(data_path, 'rb'), protocal = 2, encoding = 'latin1')
-#             return all_img_data, all_label
-
-#     def next_batch(self,
-#                    batch_size):
-#         if self.idx >= n_sample:
-#             self.idx = 0
-#             if self.shuffle:
-#                 self.train_inputs, self.train_targets = shuffle(self.train_inputs, self.train_targets)
-
-#         if train_dev_test == 'train':
-#             endidx = min(self.idx + self.batch_size, self.n_train_data_set)
-#             batch_inputs = self.train_inputs[self.idx:endidx, :, :]
-#             batch_targets = self.train_targets[self.idx:endidx, :, :]
-#             batch_seq_lens = self.train_seq_lens_lens[self.idx:endidx]
-#         elif train_dev_test == 'dev':
-#             endidx = min(self.idx + self.batch_size, self.n_dev_data_set)
-#             batch_inputs = self.dev_inputs[self.idx:endidx, :, :]
-#             batch_targets = self.dev_targets[self.idx:endidx, :, :]
-#             batch_seq_lens = self.dev_seq_lens_lens[self.idx:endidx]
-#         elif train_dev_test == 'test':
-#             endidx = min(self.idx + self.batch_size, self.n_prediction_data_set)
-#             batch_inputs = self.prediction_inputs[self.idx:endidx, :, :]
-#             batch_targets = None
-#             batch_seq_lens = self.prediction_seq_lengths[self.idx:endidx]
-#         else:
-#             raise ValueError('train_dev_test must be train or dev or test')
-        
-#         self.idx += self.batch_size
-
-#         return batch_inputs, batch_targets, batch_seq_lens
+def _pad_and_flip_FP(inputs, inputs_len):
+    # reverse every flight plan
+    max_len = inputs_len.max()
+    _inputs = []
+    i = 0
+    for _input in inputs:
+        _inputs.append(np.pad(_input.reshape(-1,2)[::-1], ((0, max_len - inputs_len[i]), (0,0)), 'constant', constant_values = 0))
+        i+=1
+    return np.asarray(_inputs)

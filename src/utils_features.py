@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-27 21:41:43
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-09-23 15:34:20
+# @Last Modified time: 2018-10-01 14:50:53
 
 import os
 import numpy as np
@@ -185,13 +185,13 @@ class flight_track_feature_generator:
         
         print('================ match weather name info =================')
         # match with wind/ temperature fname
-        wind_query_idx, wind_valid_query, wind_time_objs, self.wind_ftime_tree = match_wind_fname(self.wind_fname_list, query_body, max_sec_bound = 3*3600)
-        flight_tracks.loc[wind_valid_query, 'wind_fname'] = wind_time_objs[wind_query_idx[wind_valid_query], 0]
+        wind_query_idx, wind_valid_query, self.wind_time_objs, self.wind_ftime_tree = match_wind_fname(self.wind_fname_list, query_body, max_sec_bound = 3*3600)
+        flight_tracks.loc[wind_valid_query, 'wind_fname'] = self.wind_time_objs[wind_query_idx[wind_valid_query], 0]
         flight_tracks.loc[~wind_valid_query, 'wind_fname'] = np.nan
 
         # match with ncwf idx
-        wx_query_idx, wx_valid_query, wx_time_obj, wx_fname_hourly, self.wx_ftime_tree = match_ncwf_fname(self.start_time, query_body, max_sec_bound = 3600)
-        flight_tracks.loc[wx_valid_query, 'wx_fname'] = wx_fname_hourly[wx_query_idx[wx_valid_query]]
+        wx_query_idx, wx_valid_query, wx_time_obj, self.wx_fname_hourly, self.wx_ftime_tree = match_ncwf_fname(self.start_time, query_body, max_sec_bound = 3600)
+        flight_tracks.loc[wx_valid_query, 'wx_fname'] = self.wx_fname_hourly[wx_query_idx[wx_valid_query]]
         flight_tracks.loc[~wx_valid_query, 'wx_fname'] = np.nan
         flight_tracks.loc[wx_valid_query, 'wx_idx'] = wx_query_idx[wx_valid_query]
         flight_tracks.loc[~wx_valid_query, 'wx_idx'] = np.nan
@@ -351,7 +351,7 @@ def match_wind_fname(wind_fname_list, query_body, max_sec_bound = 21960):
     time_objs = np.array(time_objs, dtype=np.object)
     wind_ftime_tree = cKDTree(time_objs[:, -1].reshape(-1, 1))
     query_dist, query_index = wind_ftime_tree.query(query_body.reshape(-1,1), p = 1, distance_upper_bound = max_sec_bound)
-    valid_query = query_index < time_objs.shape[0]
+    valid_query = query_index < time_objs.shape[0] # binary array
     return query_index, valid_query, time_objs, wind_ftime_tree
 
 def match_ncwf_fname(start_time, query_body, max_sec_bound = 7200):

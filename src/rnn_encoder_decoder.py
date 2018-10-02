@@ -237,7 +237,8 @@ class LSTM_model:
                 else:
                     state_placeholder = tf.placeholder(dtype = tf.float32, shape = [n_layers, 2, None, n_cell_dim], name = 'packed_init_state')
                     unpack_state_placeholder = tf.unstack(state_placeholder, axis=0)
-                    self._initial_state = tuple([tf.nn.rnn_cell.LSTMStateTuple(unpack_state_placeholder[idx][0],unpack_state_placeholder[idx][1]) for idx in range(n_layers)])
+                    self._initial_state = tuple([tf.nn.rnn_cell.LSTMStateTuple(unpack_state_placeholder[idx][0],
+                                                                               unpack_state_placeholder[idx][1]) for idx in range(n_layers)])
 
                 decoder_outputs, self.decode_final_state = tf.nn.dynamic_rnn(cell = stack, 
                                                                              inputs = layer_emb_decode,
