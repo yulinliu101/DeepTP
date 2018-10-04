@@ -13,4 +13,9 @@ def read_log_file(root_dir, file_name_list):
                     losses.append(loss)
     return np.array(losses)
                     
-# losses = read_log_file('log', ['log_train_20180421-142055.log', 'log_train_20180423-154608.log', 'log_train_20180424-112057.log', 'log_train_20180425-001738.log'])
+losses = read_log_file('log', 
+                        ['log_train_20181003-214408.log'])
+
+import matplotlib.pyplot as plt
+plt.plot(np.arange(losses.shape[0]), losses)
+plt.show()

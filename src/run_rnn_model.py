@@ -47,15 +47,24 @@ class trainRNN:
             self.tf_device = '/cpu:0'
         logging.info('Using device %s for main computations', self.tf_device)
         
-        self.cpu_dataset = DatasetEncoderDecoder(actual_track_datapath = '../../DATA/DeepTP/processed_flight_tracks.csv',
-                                                 flight_plan_datapath = '../../DATA/DeepTP/processed_flight_plans.csv',
-                                                 flight_plan_utilize_datapath = '../../DATA/DeepTP/IAH_BOS_Act_Flt_Trk_20130101_1231.CSV',
-                                                 feature_cubes_datapath = '../../DATA/DeepTP/feature_cubes.npz',
-                                                 shuffle_or_not = True,
-                                                 split = True,
-                                                 batch_size = self.batch_size,
-                                                 dep_lat = 29.98333333,
-                                                 dep_lon = -95.33333333)
+        if not self.sample_traj:
+            self.cpu_dataset = DatasetEncoderDecoder(actual_track_datapath = '../../DATA/DeepTP/processed_flight_tracks.csv',
+                                                     flight_plan_datapath = '../../DATA/DeepTP/processed_flight_plans.csv',
+                                                     flight_plan_utilize_datapath = '../../DATA/DeepTP/IAH_BOS_Act_Flt_Trk_20130101_1231.CSV',
+                                                     feature_cubes_datapath = '../../DATA/DeepTP/feature_cubes.npz',
+                                                     shuffle_or_not = True,
+                                                     split = True,
+                                                     batch_size = self.batch_size,
+                                                     dep_lat = 29.98333333,
+                                                     dep_lon = -95.33333333)
+        else:
+            self.std_arr_loader = np.load('../../DATA/DeepTP/standardize_arr.npz')
+            self.std_arr_loader['track_mean']
+            self.std_arr_loader['track_std']
+            self.std_arr_loader['fp_mean']
+            self.std_arr_loader['fp_std']
+            self.std_arr_loader['feature_mean']
+            self.std_arr_loader['feature_std']
 
     def load_configs(self):
         parser = ConfigParser(os.environ)
@@ -141,7 +150,7 @@ class trainRNN:
                 self.writer = tf.summary.FileWriter(self.SUMMARY_DIR, graph=self.sess.graph)
 
             # Add ops to save and restore all the variables
-            self.saver = tf.train.Saver()
+            self.saver = tf.train.Saver(max_to_keep=30)
             section = '\n{0:=^40}\n'
             if self.restored_model_path is None:
                 self.sess.run(tf.global_variables_initializer())
@@ -172,15 +181,15 @@ class trainRNN:
                     logger.info("===============================================================")
                     logger.info(section.format('Restore model from %s'%self.restored_model_path))
                     if self.sample_traj:
-                        self.dataset_sample = DatasetSample(train_track_mean = self.cpu_dataset.data_mean,
-                                                            train_track_std = self.cpu_dataset.data_std,
-                                                            train_fp_mean = self.cpu_dataset.FP_mean,
-                                                            train_fp_std = self.cpu_dataset.FP_std,
-                                                            feature_cubes_mean = self.cpu_dataset.feature_cubes_mean, 
-                                                            feature_cubes_std = self.cpu_dataset.feature_cubes_std,
+                        self.dataset_sample = DatasetSample(train_track_mean = self.std_arr_loader['track_mean'],
+                                                            train_track_std = self.std_arr_loader['track_std'],
+                                                            train_fp_mean = self.std_arr_loader['fp_mean'],
+                                                            train_fp_std = self.std_arr_loader['fp_std'],
+                                                            feature_cubes_mean =self.std_arr_loader['feature_mean'],
+                                                            feature_cubes_std = self.std_arr_loader['feature_std'],
                                                             ncwf_data_rootdir = '../../DATA/NCWF/gridded_storm_hourly/',
-                                                            test_track_dir = '../../DATA/DeepTP/test_flight_tracks.csv',
-                                                            test_fp_dir = '../../DATA/DeepTP/test_flight_plans.csv',
+                                                            test_track_dir = '../../DATA/DeepTP/test_flight_tracks_one_traj.csv',
+                                                            test_fp_dir = '../../DATA/DeepTP/test_flight_plans_one_traj.csv',
                                                             flight_plan_util_dir = '../../DATA/DeepTP/test_flight_plans_util.CSV',
                                                             wind_data_rootdir = '../../DATA/filtered_weather_data/namanl_small_npz/',
                                                             grbs_common_info_dir = '/media/storage/DATA/filtered_weather_data/grbs_common_info.npz',
@@ -218,8 +227,8 @@ class trainRNN:
                         # width = 10 # 30, 300, 0.1
                         # keep_search = 10
                         search_power = 2
-                        debug = False
-                        weights = 0.1
+                        debug = True
+                        weights = 0.5
                         with tf.device('/cpu:0'):
                             # predicted_tracks, \
                             #  final_top_k_idx_seq, \
@@ -240,14 +249,15 @@ class trainRNN:
                             predicted_tracks, \
                              predicted_tracks_cov, \
                               buffer_total_logprob, \
-                               buffer_pi_prob = self.sample_seq_mu_cov(start_tracks = tracks_split, 
-                                                                       start_tracks_feature_cubes = start_tracks_feature_cubes,
-                                                                       normalized_flight_plan = fp_tracks_split, 
-                                                                       flight_plan_length = fp_seq_length,
-                                                                       max_length = 40, 
-                                                                       search_power = search_power,
-                                                                       weights = weights,
-                                                                       debug = debug)
+                               buffer_pi_prob, \
+                                predicted_matched_info = self.sample_seq_mu_cov(start_tracks = tracks_split, 
+                                                                                start_tracks_feature_cubes = start_tracks_feature_cubes,
+                                                                                normalized_flight_plan = fp_tracks_split, 
+                                                                                flight_plan_length = fp_seq_length,
+                                                                                max_length = 50, 
+                                                                                search_power = search_power,
+                                                                                weights = weights,
+                                                                                debug = debug)
 
                                                                        # max_length = 150, 
                                                                        # beam_search = True,
@@ -260,9 +270,9 @@ class trainRNN:
                         # with open('../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100), 'wb') as wpkl:
                         #     pickle.dump((predicted_tracks, final_top_k_idx_seq, buffer_total_logprob, mus, covs), wpkl)
                         # print('Finished sampling. File dumped to ../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100))
-                        with open('../data/test/samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100), 'wb') as wpkl:
-                            pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob), wpkl)
-                        print('Finished sampling. File dumped to ../data/test/samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100))
+                        with open('debug_file/samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100), 'wb') as wpkl:
+                            pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info), wpkl)
+                        print('Finished sampling. File dumped to debug_file/samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100))
                     else:
                         pass
             # save train summaries to disk
@@ -276,20 +286,24 @@ class trainRNN:
         self.input_encode_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_encode], name = 'encode_tensor')
         self.seq_len_encode = tf.placeholder(dtype = tf.int32, shape = [None], name = 'seq_length_encode')
         self.input_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_input, self.n_input, self.n_channels], name = 'decode_feature_map')
+        self.input_decode_coords_tensor = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_controled_var], name = 'decode_coords')
         self.target = tf.placeholder(dtype = tf.float32, shape = [None, None, self.n_controled_var], name = 'target')
         self.seq_length = tf.placeholder(dtype = tf.int32, shape = [None], name = 'seq_length_decode')
 
     def launchGraph(self):
         self.define_placeholder()
-        self.MODEL = LSTM_model(self.conf_path, 
-                                self.input_encode_tensor, 
-                                self.seq_len_encode, 
-                                self.n_encode, 
-                                self.input_tensor, 
-                                self.seq_length, 
-                                self.n_input, 
-                                self.target, 
-                                not self.sample_traj)
+        self.MODEL = LSTM_model(conf_path = self.conf_path,
+                                batch_x = self.input_encode_tensor,
+                                seq_length = self.seq_len_encode,
+                                n_input = self.n_encode,
+                                batch_x_decode = self.input_tensor,
+                                batch_xcoords_decode = self.input_decode_coords_tensor,
+                                seq_length_decode = self.seq_length,
+                                n_input_decode = self.n_input,
+                                target = self.target,
+                                train = not self.sample_traj,
+                                weight_summary = False)
+
         # if not self.sample_traj:
         #     self.loss_placeholder = tf.placeholder(dtype = tf.float32, shape = [])
         #     self.loss_summary = tf.summary.scalar("training_avg_loss", self.loss_placeholder) 
@@ -316,9 +330,9 @@ class trainRNN:
             #     logger.info('Validating ...')
             #     dev_accuracy = self.run_dev_epoch(epoch)
             #     logger.info('==============================')
-            if (epoch+1) % 200 == 0:
+            if (epoch+1) % 500 == 0:
                 print('learning rate is %f'%self.MODEL.learning_rate)
-                self.MODEL.learning_rate = self.MODEL.learning_rate * 0.75
+                self.MODEL.learning_rate = self.MODEL.learning_rate * 0.5
 
             if (epoch + 1 == self.epochs) or is_checkpoint_step:
                 # summary_line = self.sess.run(self.loss_summary, feed_dict = {self.loss_placeholder: train_epoch_loss})
@@ -355,7 +369,8 @@ class trainRNN:
         for _ in range(n_batches_per_epoch):
             batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes = dataset.next_batch()
             feeds = {self.input_tensor: batch_inputs_feature_cubes,
-                     self.target: batch_inputs,
+                     self.input_decode_coords_tensor: batch_inputs,
+                     self.target: batch_targets,
                      self.seq_length: batch_seq_lens,
                      self.input_encode_tensor: batch_inputs_FP,
                      self.seq_len_encode: batch_seq_lens_FP,
@@ -376,7 +391,7 @@ class trainRNN:
                           normalized_flight_plan, 
                           flight_plan_length, 
                           max_length = 100, 
-                          search_power = 3,
+                          search_power = 2,
                           weights = 0.1,
                           debug = False):
         # start_tracks should have the shape of [n_seq, n_time, n_input]
@@ -384,12 +399,28 @@ class trainRNN:
         # normalized_flight_plan should be (flight_plan - [dep_lat, dep_lon] - fp_mu)/fp_std; and then pad_and_flip
         # for each sample in the start_tracks, it should have the same length
         # flight_plan_length should have the shape of [n_seq]
-
         #################################################
         #############   data preprocessing  #############
         #################################################
-        # start_tracks = (start_tracks - standard_mu)/standard_std
         n_seq, n_time, _ = start_tracks.shape
+        coords_logprob_tensor = self.MODEL.MVN_pdf.log_prob(self.MODEL.mu_layer)
+        coords_cov_tensor = tf.matmul(self.MODEL.L_layer, self.MODEL.L_layer, transpose_b = True)
+
+
+        feeds_update = {self.input_tensor: start_tracks_feature_cubes,
+                        self.seq_length: [n_time]*n_seq,
+                        self.input_encode_tensor: normalized_flight_plan,
+                        self.seq_len_encode: flight_plan_length}
+
+        state, pi_logprob, coords_logprob, coords_mu, coords_cov = self.sess.run([self.MODEL.decode_final_state, 
+                                                                                      tf.log(self.MODEL.pi_layer), 
+                                                                                      coords_logprob_tensor,
+                                                                                      self.MODEL.mu_layer,
+                                                                                      coords_cov_tensor], 
+                                                                                     feed_dict = feeds_update)
+        with open('debug_file/samp_mu_cov_first_pnt_using_long.pkl', 'wb') as f:
+            pickle.dump((state, pi_logprob, coords_logprob, coords_mu, coords_cov), f)
+
         
         #########################################################
         #############   initialize neural network   #############
@@ -406,12 +437,11 @@ class trainRNN:
         # state = self.sess.run([self.MODEL.decode_final_state], feed_dict = feeds)
         # # state, encoder_state = self.sess.run([self.MODEL.decode_final_state, self.MODEL._initial_state], feed_dict = feeds)
         # if debug:
-        #     with open('debug_file/samp_mu_cov_encoder_state_debug.pkl', 'wb') as f:
-        #             pickle.dump((state, encoder_state), f)
+        # with open('debug_file/samp_mu_cov_encoder_state_debug.pkl', 'wb') as f:
+        #         pickle.dump((encoder_state), f)
 
         # last_input_track_point = start_tracks[:, -1, None]   # shape of [n_seq, 1, 4]
-        coords_logprob_tensor = self.MODEL.MVN_pdf.log_prob(self.MODEL.mu_layer)
-        coords_cov_tensor = tf.matmul(self.MODEL.L_layer, self.MODEL.L_layer, transpose_b = True)
+        
         
         ###################################################
         #############   start the main loop   #############
@@ -453,9 +483,6 @@ class trainRNN:
             coords_cov: np array with size (n_seq*n_mixture^i, n_mixture, n_input, n_input)
             coords_logprob: np array with size (n_seq*n_mixture^i, n_mixture)
             """
-            if (i == search_power - 1) and (debug is True):
-                with open('debug_file/samp_mu_cov_inner_loop1_debug.pkl', 'wb') as f:
-                    pickle.dump((state, pi_logprob, coords_logprob, coords_mu, coords_cov), f)
 
             last_input_track_point = coords_mu.reshape(coords_mu.shape[0]*coords_mu.shape[1], 1, -1) # shape of [n_seq*n_mixture^(i+1), 1, n_input]
             last_input_track_point_cov = coords_cov.reshape(-1, 1, coords_cov.shape[2], coords_cov.shape[3]) # shape of [n_seq*n_mixture^(i+1), n_input, n_input]
@@ -466,7 +493,7 @@ class trainRNN:
             if i == 0:
                 buffer_total_logprob = (pi_logprob*weights + coords_logprob*(1-weights)) # has the shape of [n_seq, n_mixture]
                 buffer_pi_prob = np.exp(pi_logprob)
-                print(buffer_pi_prob)
+                # print(buffer_pi_prob)
                 # print(last_input_track_point)
                 final_tracks = np.concatenate((np.repeat(start_tracks, self.n_mixture, axis = 0), last_input_track_point), axis = 1)
                 # has the shape of [n_seq*n_mixture, n_time+1, 4]
@@ -501,6 +528,9 @@ class trainRNN:
                                                                                                    shift_ydown = 1,
                                                                                                    nx = 20,
                                                                                                    ny = 20)
+            if (i == 0) and (debug is True):
+                with open('debug_file/samp_mu_cov_inner_loop0_debug.pkl', 'wb') as f:
+                    pickle.dump((state, pi_logprob, coords_logprob, coords_mu, coords_cov, pred_feature_cubes, pred_feature_grid, predicted_matched_info), f)
 
         # From here, feeds_update will have fixed shapes
         for j in range(max_length - search_power):
@@ -523,7 +553,7 @@ class trainRNN:
             """
             if (j == 0) and (debug is True):
                 with open('debug_file/samp_mu_cov_inner_loop1_debug.pkl', 'wb') as f:
-                    pickle.dump((state, pi_logprob, coords_logprob, coords_mu, coords_cov), f)
+                    pickle.dump((state, pi_logprob, coords_logprob, coords_mu, coords_cov, pred_feature_cubes, pred_feature_grid, predicted_matched_info), f)
 
             if j == 0:
                 buffer_total_logprob = np.repeat(buffer_total_logprob, self.n_mixture, axis = 0)
@@ -563,8 +593,8 @@ class trainRNN:
 
         if debug:
             with open('debug_file/samp_mu_cov_outer_loop_debug.pkl', 'wb') as f:
-                pickle.dump((state, pi_logprob, coords_logprob, final_tracks), f)
-        return final_tracks[:, n_time:, :], final_tracks_cov, buffer_total_logprob, buffer_pi_prob
+                pickle.dump((state, pi_logprob, coords_logprob, final_tracks, pred_feature_cubes, pred_feature_grid, predicted_matched_info), f)
+        return final_tracks[:, n_time:, :], final_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info
 
 
     def arrange_top_k(self, 
@@ -585,9 +615,8 @@ class trainRNN:
         return final_seq
 
     # def sample_seq(self, 
-    #                start_tracks, 
-    #                standard_mu, 
-    #                standard_std, 
+    #                start_tracks, # normalized
+    #                start_tracks_feature_cubes, # normalized
     #                normalized_flight_plan, 
     #                flight_plan_length, 
     #                max_length = 100, 
@@ -601,7 +630,6 @@ class trainRNN:
     #     # normalized_flight_plan should be (flight_plan - [dep_lat, dep_lon] - fp_mu)/fp_std; and then pad_and_flip
     #     # for each sample in the start_tracks, it should have the same length
     #     # flight_plan_length should have the shape of [n_sample]
-    #     start_tracks = (start_tracks - standard_mu)/standard_std
     #     # fp_tracks = (flight_plan - fp_mu)/fp_std
     #     n_seq, n_time, _ = start_tracks.shape
     #     if not beam_search:
@@ -622,7 +650,7 @@ class trainRNN:
     #     #              self.seq_len_encode: buffer_fp_len}
     #     # encoder_state0 = self.sess.run(self.MODEL.encoder_final_state, feed_dict = tmp_feed) # should have the size of (buffer_size*n_seq) tuples
         
-    #     feeds = {self.input_tensor: buffer_track,
+    #     feeds = {self.input_tensor: start_tracks_feature_cubes,
     #              self.seq_length: [n_time]*n_seq*buffer_size,
     #              self.input_encode_tensor: buffer_fp,
     #              self.seq_len_encode: buffer_fp_len}

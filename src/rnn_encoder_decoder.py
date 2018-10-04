@@ -40,8 +40,9 @@ class LSTM_model:
                  seq_length, 
                  n_input, 
                  batch_x_decode, 
+                 batch_xcoords_decode, 
                  seq_length_decode, 
-                 n_input_decode, 
+                 n_input_decode, # side size of the image
                  target, 
                  train = True, 
                  weight_summary = False):
@@ -75,22 +76,22 @@ class LSTM_model:
         filter_1 = parser.getint('convolution', 'filter_1')
         filter_2 = parser.getint('convolution', 'filter_2')
         filter_3 = parser.getint('convolution', 'filter_3')
-        filter_4 = parser.getint('convolution', 'filter_4')
+        # filter_4 = parser.getint('convolution', 'filter_4')
         filter_1_dep = parser.getint('convolution', 'filter_1_dep')
         filter_2_dep = parser.getint('convolution', 'filter_2_dep')
         filter_3_dep = parser.getint('convolution', 'filter_3_dep')
-        filter_4_dep = parser.getint('convolution', 'filter_4_dep')
+        # filter_4_dep = parser.getint('convolution', 'filter_4_dep')
         dense_dep = parser.getint('convolution', 'dense_dep')
 
         wc1_stddev = 0.01
         wc2_stddev = 0.01
         wc3_stddev = 0.01
-        wc4_stddev = 0.01
+        # wc4_stddev = 0.01
         wcd_stddev = 0.01
         bc1_stddev = 0.01
         bc2_stddev = 0.01
         bc3_stddev = 0.01
-        bc4_stddev = 0.01
+        # bc4_stddev = 0.01
         bcd_stddev = 0.01
 
         n_hidden_1 = parser.getint('lstm', 'n_hidden_1')
@@ -152,7 +153,7 @@ class LSTM_model:
                 tf.summary.histogram("activations", encoder_outputs)
 
         batch_x_decode_shape = tf.shape(batch_x_decode)
-        batch_x_decode = tf.reshape(batch_x_decode, [-1, n_input_decode, n_input_decode, n_channels])  # (batch_size*time, n_input)
+        batch_x_decode = tf.reshape(batch_x_decode, [-1, n_input_decode, n_input_decode, n_channels])  # (batch_size*time, n_input, n_input, n_channels)
 
         with tf.name_scope('embedding_decoder_convolution'):
             wc1 = variable_on_device('wc1', 
@@ -164,11 +165,12 @@ class LSTM_model:
             wc3 = variable_on_device('wc3',
                                      [filter_3, filter_3, filter_2_dep, filter_3_dep],
                                      tf.truncated_normal_initializer(stddev=wc3_stddev))
-            wc4 = variable_on_device('wc4',
-                                     [filter_4, filter_4, filter_3_dep, filter_4_dep],
-                                     tf.truncated_normal_initializer(stddev=wc4_stddev))
+            # wc4 = variable_on_device('wc4',
+            #                          [filter_4, filter_4, filter_3_dep, filter_4_dep],
+            #                          tf.truncated_normal_initializer(stddev=wc4_stddev))
+            final_size = (n_input_decode - filter_1)/2 + 1 - filter_2 + 1 - filter_3 + 1
             wcd = variable_on_device('wcd',
-                                     [5*5*filter_4_dep, dense_dep],
+                                     [final_size*final_size*filter_3_dep, dense_dep],
                                      tf.truncated_normal_initializer(stddev=wcd_stddev))
 
             bc1 = variable_on_device('bc1', 
@@ -180,41 +182,47 @@ class LSTM_model:
             bc3 = variable_on_device('bc3',
                                      [filter_3_dep],
                                      tf.random_normal_initializer(stddev=bc3_stddev))
-            bc4 = variable_on_device('bc4',
-                                     [filter_4_dep],
-                                     tf.random_normal_initializer(stddev=bc4_stddev))
+            # bc4 = variable_on_device('bc4',
+            #                          [filter_4_dep],
+            #                          tf.random_normal_initializer(stddev=bc4_stddev))
             bcd = variable_on_device('bcd',
                                      [dense_dep],
                                      tf.random_normal_initializer(stddev=bcd_stddev))
 
-            conv1 = conv2d_bias(batch_x_decode, wc1, bc1, s = 1)
+            conv1 = conv2d_bias(batch_x_decode, wc1, bc1, s = 2, padding = 'VALID')
             print("conv 1 layer shape: ", conv1.get_shape())
-            conv2 = conv2d_bias(conv1, wc2, bc2, s = 1)
+            conv2 = conv2d_bias(conv1, wc2, bc2, s = 1, padding = 'VALID')
             print("conv 2 layer shape: ", conv2.get_shape())
-            pool1 = max_pool(conv2, k = 2, s = 2)
-            print("pool 1 layer shape: ", pool1.get_shape())
-            conv3 = conv2d_bias(pool1, wc3, bc3, s = 1)
+            # pool1 = max_pool(conv2, k = 2, s = 2)
+            # print("pool 1 layer shape: ", pool1.get_shape())
+            conv3 = conv2d_bias(conv2, wc3, bc3, s = 1, padding = 'VALID')
             print("conv 3 layer shape: ", conv3.get_shape())
-            conv4 = conv2d_bias(conv3, wc4, bc4, s = 1)
-            print("conv 4 layer shape: ", conv4.get_shape())
-            pool2 = max_pool(conv4, k = 2, s = 2)
-            print("pool 2 layer shape: ", pool2.get_shape())
-            pool2_shape = tf.shape(pool2)
-            dense = tf.reshape(pool2, [-1, pool2_shape[1]*pool2_shape[2]*pool2_shape[3]])
-            print("dense shape (reshape from pool2): ", dense.get_shape())
+            # conv4 = conv2d_bias(conv3, wc4, bc4, s = 1, padding = 'VALID')
+            # print("conv 4 layer shape: ", conv4.get_shape())
+            # pool2 = max_pool(conv4, k = 2, s = 2)
+            # print("pool 2 layer shape: ", pool2.get_shape())
+            # pool2_shape = tf.shape(pool2)
+            conv3_shape = tf.shape(conv3)
+            dense = tf.reshape(conv3, [-1, conv3_shape[1]*conv3_shape[2]*conv3_shape[3]])
+            print("dense shape (reshape from conv3): ", dense.get_shape())
             fc1 = tf.nn.elu(tf.nn.xw_plus_b(dense, wcd, bcd))
             print("fully connected layer shape: ", fc1.get_shape())
             fc1_dropout = tf.nn.dropout(fc1, 1 - dropout[1])
 
+
+        batch_xcoords_decode_shape = tf.shape(batch_xcoords_decode)
+        batch_xcoords_decode = tf.reshape(batch_xcoords_decode, [-1, n_controled_var])  # (batch_size*time, n_controled_var)
+        with tf.name_scope('concat_conv_coords'):
+            concat_dense = tf.concat([batch_xcoords_decode, fc1_dropout], axis = 1)
 
         with tf.name_scope('embedding_decoder'):
             b2 = variable_on_device('b2', 
                                     [n_hidden_2], 
                                     tf.random_normal_initializer(stddev=b2_stddev))
             h2 = variable_on_device('h2', 
-                                    [dense_dep, n_hidden_2],
+                                    [dense_dep + n_controled_var, n_hidden_2],
                                     tf.random_normal_initializer(stddev=h2_stddev))
-            layer_emb_decode = tf.nn.elu(tf.nn.xw_plus_b(fc1_dropout, h2, b2))
+            layer_emb_decode = tf.nn.elu(tf.nn.xw_plus_b(concat_dense, h2, b2))
             layer_emb_decode = tf.nn.dropout(layer_emb_decode, (1.0 - dropout[0]))
 
             # with tf.device('/cpu:0'):
@@ -232,13 +240,15 @@ class LSTM_model:
                     cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob = 1 - dropout[2])
                     cells.append(cell)
                 stack = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=True)
-                if train:
-                    self._initial_state = self.encoder_final_state
-                else:
-                    state_placeholder = tf.placeholder(dtype = tf.float32, shape = [n_layers, 2, None, n_cell_dim], name = 'packed_init_state')
-                    unpack_state_placeholder = tf.unstack(state_placeholder, axis=0)
-                    self._initial_state = tuple([tf.nn.rnn_cell.LSTMStateTuple(unpack_state_placeholder[idx][0],
-                                                                               unpack_state_placeholder[idx][1]) for idx in range(n_layers)])
+
+                self._initial_state = self.encoder_final_state
+                # if train:
+                #     self._initial_state = self.encoder_final_state
+                # else:
+                #     state_placeholder = tf.placeholder(dtype = tf.float32, shape = [n_layers, 2, None, n_cell_dim], name = 'packed_init_state')
+                #     unpack_state_placeholder = tf.unstack(state_placeholder, axis=0)
+                #     self._initial_state = tuple([tf.nn.rnn_cell.LSTMStateTuple(unpack_state_placeholder[idx][0],
+                #                                                                unpack_state_placeholder[idx][1]) for idx in range(n_layers)])
 
                 decoder_outputs, self.decode_final_state = tf.nn.dynamic_rnn(cell = stack, 
                                                                              inputs = layer_emb_decode,

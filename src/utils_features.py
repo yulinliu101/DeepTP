@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-27 21:41:43
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-10-01 14:50:53
+# @Last Modified time: 2018-10-03 15:49:50
 
 import os
 import numpy as np
@@ -179,7 +179,7 @@ class flight_track_feature_generator:
         print('================ decode azimuth (back and forward, in radians) and altitude info =================')
         flight_tracks.loc[:, 'azimuth'] = GetAzimuth(flight_tracks, course = False) * np.pi/180
         # azimuth is used to generate oriented feature cubes and corresponding grids
-        flight_tracks.loc[:, 'course'] = GetAzimuth(flight_tracks) * np.pi/180
+        flight_tracks.loc[:, 'course'] = GetAzimuth(flight_tracks, course = True) * np.pi/180
         flight_tracks.loc[:, 'levels'] = flight_tracks['Alt'].apply(lambda x: proxilvl(x*100, self.lvls_dict))
         flight_tracks.loc[:, 'wx_alt'] = flight_tracks['Alt']//10
         

@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-16 14:51:38
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-10-01 22:24:27
+# @Last Modified time: 2018-10-03 15:51:55
 
 # api functions that are mostly called by other paks
 
@@ -253,7 +253,7 @@ def downsample_track_data(path_to_fp,
 def rotate_coord(old_coord, theta):
     """
     IMPORTANT NOTE:
-    theta could either be a single angle or an array with degree, NOT radian;
+    theta could either be a single angle or an array with radian, NOT degree;
     theta should be angle rotating from x-axis!!!
     """
     rotation_matrix = np.array([np.cos(theta), -np.sin(theta), np.sin(theta), np.cos(theta)]).T.reshape(-1, 2, 2)

@@ -32,29 +32,35 @@ class DatasetEncoderDecoder:
 
         self.dep_lat = kwargs.get('dep_lat', 29.98333333)
         self.dep_lon = kwargs.get('dep_lon', -95.33333333)
-        self.direct_course = kwargs.get('direct_course', 0) # TODO
+        self.arr_lat = kwargs.get('arr_lat', 42.3666666667)
+        self.arr_lon = kwargs.get('arr_lon', -70.9666666667)
+
+        self.direct_course = kwargs.get('direct_course', g.inv(self.dep_lon, self.dep_lat, self.arr_lon, self.arr_lat)[0]* np.pi/180)
         self.idx = kwargs.get('idx', 0)
 
         self.all_tracks, \
-         self.all_seq_lens, \
-          self.data_mean, \
-           self.data_std, \
-            self.all_FP_tracks, \
-             self.all_seq_lens_FP, \
-              self.FP_mean, \
-               self.FP_std, \
-                self.tracks_time_id_info = self.load_track_data()
+         self.all_targets, \
+          self.all_seq_lens, \
+           self.data_mean, \
+            self.data_std, \
+             self.all_FP_tracks, \
+              self.all_seq_lens_FP, \
+               self.FP_mean, \
+                self.FP_std, \
+                 self.tracks_time_id_info = self.load_track_data()
 
         self.feature_cubes, self.feature_cubes_mean, self.feature_cubes_std = self.load_feature_cubes()
         self.feature_cubes = np.split(self.feature_cubes, np.cumsum(self.all_seq_lens))[:-1]
 
         if self.shuffle_or_not:
             self.all_tracks, \
+             self.all_targets, \
               self.all_seq_lens, \
                 self.all_FP_tracks, \
                   self.all_seq_lens_FP, \
                     self.feature_cubes, \
                       self.tracks_time_id_info = shuffle(self.all_tracks, 
+                                                         self.all_targets,
                                                          self.all_seq_lens, 
                                                          self.all_FP_tracks, 
                                                          self.all_seq_lens_FP, 
@@ -65,16 +71,19 @@ class DatasetEncoderDecoder:
         if self.split:
             self.train_tracks, \
              self.dev_tracks, \
-              self.train_seq_lens, \
-               self.dev_seq_lens, \
-                self.train_FP_tracks, \
-                 self.dev_FP_tracks, \
-                  self.train_seq_lens_FP, \
-                   self.dev_seq_lens_FP, \
-                    self.train_feature_cubes, \
-                     self.dev_feature_cubes, \
-                      self.train_tracks_time_id_info, \
-                       self.dev_tracks_time_id_info = train_test_split(self.all_tracks, 
+              self.train_targets, \
+               self.dev_targets, \
+                self.train_seq_lens, \
+                 self.dev_seq_lens, \
+                  self.train_FP_tracks, \
+                   self.dev_FP_tracks, \
+                    self.train_seq_lens_FP, \
+                     self.dev_seq_lens_FP, \
+                      self.train_feature_cubes, \
+                       self.dev_feature_cubes, \
+                        self.train_tracks_time_id_info, \
+                         self.dev_tracks_time_id_info = train_test_split(self.all_tracks,
+                                                                       self.all_targets, 
                                                                        self.all_seq_lens, 
                                                                        self.all_FP_tracks,
                                                                        self.all_seq_lens_FP,
@@ -84,6 +93,7 @@ class DatasetEncoderDecoder:
                                                                        train_size = 0.8,
                                                                        test_size = None)
 
+        self.train_targets = _pad(self.train_targets, self.train_seq_lens) 
         self.train_tracks = _pad(self.train_tracks, self.train_seq_lens)
         self.train_feature_cubes = _pad(self.train_feature_cubes, self.train_seq_lens)
         self.n_train_data_set = self.train_tracks.shape[0]
@@ -123,6 +133,9 @@ class DatasetEncoderDecoder:
         tracks = (tracks - avg)/std_err
         tracks_split = np.split(tracks, np.cumsum(seq_length_tracks))[:-1]
 
+        # add the arrival information to construct the target sequence
+        targets_split = self._construct_target(tracks_split, avg, std_err)
+
         FP_track_order = track_data_with_FP.groupby('FID')[['FID', 'Elap_Time', 'FP_tracks', 'seq_len']].head(1)
         seq_length_FP = FP_track_order.seq_len.values.astype(np.int32)
         FP_tracks_split = FP_track_order.FP_tracks.values
@@ -133,24 +146,41 @@ class DatasetEncoderDecoder:
         FP_tracks_split = _pad_and_flip_FP(FP_tracks_split, seq_length_FP)
 
         # all standardized
-        return tracks_split, seq_length_tracks, avg, std_err, FP_tracks_split, seq_length_FP, avg_FP, std_err_FP, tracks_time_id_info
+        return tracks_split, targets_split, seq_length_tracks, avg, std_err, FP_tracks_split, seq_length_FP, avg_FP, std_err_FP, tracks_time_id_info
+
+    def _construct_target(self, splitted_tracks, avg, std_err):
+        tmp_list = []
+        for target_seq in splitted_tracks:
+            # print(target_seq.shape)
+            # print(avg.shape)
+            # print(std_err.shape)
+            tmp_list.append(np.concatenate((target_seq[1:, :], (np.array([[self.arr_lat - self.dep_lat, 
+                                                                          self.arr_lon - self.dep_lon, 
+                                                                          0,
+                                                                          0, 
+                                                                          0, 
+                                                                          0]]) - avg)/std_err), axis = 0))
+        return tmp_list
+
 
     def load_feature_cubes(self):
-        # return np.ones((150000, 4, 20, 20)), np.ones((4, 20, 20)), np.ones((4, 20,20))
+
         feature_cubes_pointer = np.load(self.feature_cubes_datapath)
         # feature_grid = feature_cubes_pointer['feature_grid']
         # query_idx = feature_cubes_pointer['query_idx']
         feature_cubes = feature_cubes_pointer['feature_cubes']
-        # feature_cubes = np.transpose(feature_cubes, axes = [0, 3, 1, 2]) 
+        # feature_cubes_grid = feature_cubes_pointer['feature_grid'] - np.array([self.dep_lon, self.dep_lat])
+        # feature_cubes_grid = feature_cubes_grid.reshape(-1, 20, 20, 2)
+        # feature_cubes = np.concatenate((feature_cubes, feature_cubes_grid), axis = -1)
         # feature_cubes have shape of [N_points, 20, 20, 4]
         
         # Standardize the features
         feature_cubes_mean = np.mean(feature_cubes, axis = 0)
         feature_cubes_std = np.std(feature_cubes, axis = 0)
         # Do NOT standardize the binary layer!
-        feature_cubes_mean[0, :, :] = 0.
-        feature_cubes_std[0, :, :] = 1.
-        feature_cubes_norm = (feature_cubes - feature_cubes_mean)/feature_cubes_std # shape of [N_point, 20, 20, 4]
+        feature_cubes_mean[:, :, 0] = 0.
+        feature_cubes_std[:, :, 0] = 1.
+        feature_cubes_norm = (feature_cubes - feature_cubes_mean)/feature_cubes_std # shape of [N_point, 20, 20, n_channels]
 
         return feature_cubes_norm, feature_cubes_mean, feature_cubes_std
 
@@ -167,6 +197,7 @@ class DatasetEncoderDecoder:
             endidx = min(self.idx + self.batch_size, self.n_train_data_set)
             batch_seq_lens = self.train_seq_lens[idx_list[self.idx:endidx]]
             batch_inputs = self.train_tracks[idx_list[self.idx:endidx], :, :]
+            batch_targets = self.train_targets[idx_list[self.idx:endidx], :, :]
 
             batch_seq_lens_FP = self.train_seq_lens_FP[idx_list[self.idx:endidx]]
             batch_inputs_FP = self.train_FP_tracks[idx_list[self.idx:endidx], :, :]
@@ -175,7 +206,6 @@ class DatasetEncoderDecoder:
 
             self.idx += self.batch_size
             
-        batch_targets = None
         return batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes
             
 from utils_features import match_wind_fname, match_ncwf_fname, flight_track_feature_generator, proxilvl
@@ -210,7 +240,10 @@ class DatasetSample(flight_track_feature_generator):
 
         self.dep_lat = kwargs.get('dep_lat', 29.98333333)
         self.dep_lon = kwargs.get('dep_lon', -95.33333333)
-        self.direct_course = kwargs.get('direct_course', 0)
+        self.arr_lat = kwargs.get('arr_lat', 42.3666666667)
+        self.arr_lon = kwargs.get('arr_lon', -70.9666666667)
+
+        self.direct_course = kwargs.get('direct_course', g.inv(self.dep_lon, self.dep_lat, self.arr_lon, self.arr_lat)[0]* np.pi/180)
 
         super().__init__(flight_track_dir = test_track_dir,
                          flight_plan_dir = test_fp_dir,
@@ -226,6 +259,19 @@ class DatasetSample(flight_track_feature_generator):
     def __str__(self):
         return 'Dataset Class to Conduct Sampling Procedure'
 
+    def _count_unordered_seq_length(self, count_array):
+        fp_seq_length = []
+        _tmp_ = []
+        j = -1
+        for i in count_array:
+            if i not in _tmp_:
+                _tmp_.append(i)
+                fp_seq_length.append(1)
+                j += 1
+            else:
+                fp_seq_length[j] += 1
+        return np.array(fp_seq_length).astype(np.int32)
+
     def process_test_tracks(self):
         flight_tracks = self.flight_track_preprocess(self.ori_flight_tracks)
         flight_tracks['cumDT'] = flight_tracks.groupby('FID').DT.transform(pd.Series.cumsum)
@@ -237,7 +283,8 @@ class DatasetSample(flight_track_feature_generator):
         # normalize tracks using train mean and train std
         tracks = self.normalize_flight_tracks(tracks)
 
-        seq_length = flight_tracks.groupby('FID').Lat.count().values.astype(np.int32)
+        # seq_length = flight_tracks.groupby('FID').Lat.count().values.astype(np.int32)
+        seq_length = self._count_unordered_seq_length(flight_tracks.FID.values)
         tracks_split = np.split(tracks, np.cumsum(seq_length))[:-1]
         tracks_split = np.array(tracks_split)
 
@@ -247,7 +294,7 @@ class DatasetSample(flight_track_feature_generator):
         # first substract from the lat lon of departure airport
         # then normalize using the training set mean and std
         fp_tracks = (fp_tracks - np.array([self.dep_lat, self.dep_lon]) - self.train_fp_mean)/self.train_fp_std
-        fp_seq_length = self.ori_flight_plans.groupby('FLT_PLAN_ID').LATITUDE.count().values.astype(np.int32)
+        fp_seq_length = self._count_unordered_seq_length(self.ori_flight_plans.FLT_PLAN_ID.values)
         # pad and flip
         fp_tracks_split = _pad_and_flip_FP(np.array(np.split(fp_tracks, np.cumsum(fp_seq_length))[:-1]), fp_seq_length)
 
@@ -368,6 +415,10 @@ class DatasetSample(flight_track_feature_generator):
                                                                             shift_ydown = shift_ydown,
                                                                             nx  = nx,
                                                                             ny = ny)
+        # feature_grid = feature_grid - np.array([self.dep_lon, self.dep_lat])
+        # feature_grid = feature_grid.reshape(-1, 20, 20, 2)
+        # feature_cubes = np.concatenate((feature_cubes, feature_grid), axis = -1)
+
         feature_cubes = self.normalize_feature_cubes(feature_cubes)
 
         return feature_cubes, feature_grid, query_idx
@@ -389,6 +440,9 @@ class DatasetSample(flight_track_feature_generator):
         wind_file_info is a dictionary of file time tree (kdtree) and an array of time objects
 
         """
+        predicted_final_track = self.unnormalize_flight_tracks(predicted_final_track[:, -2:, :])
+        print(predicted_final_track[0, -1, :4])
+
         azimuth_arr = g.inv(predicted_final_track[:, -2, 1],
                             predicted_final_track[:, -2, 0],
                             predicted_final_track[:, -1, 1],
@@ -416,7 +470,7 @@ class DatasetSample(flight_track_feature_generator):
                                        'Alt', 
                                        'cumDT', 
                                        'Speed', 
-                                       'course']] = self.unnormalize_flight_tracks(predicted_final_track[:, -1, :])
+                                       'course']] = predicted_final_track[:, -1, :]
 
         predicted_matched_info.loc[:, 'azimuth'] = azimuth_arr * np.pi/180
         
@@ -456,6 +510,10 @@ class DatasetSample(flight_track_feature_generator):
                                                                     shift_ydown = shift_ydown,
                                                                     nx  = nx,
                                                                     ny = ny)
+        # feature_grid = feature_grid - np.array([self.dep_lon, self.dep_lat])
+        # feature_grid = feature_grid.reshape(-1, 20, 20, 2)
+        # feature_cubes = np.concatenate((feature_cubes, feature_grid), axis = -1)
+
         feature_cubes = self.normalize_feature_cubes(feature_cubes)
         feature_cubes = feature_cubes.reshape(-1, 1, nx, ny, 4)
         
