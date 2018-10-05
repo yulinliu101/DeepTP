@@ -44,6 +44,8 @@ class LSTM_model:
                  seq_length_decode, 
                  n_input_decode, # side size of the image
                  target, 
+                 target_end,
+                 target_end_neg,
                  train = True, 
                  weight_summary = False):
 
@@ -52,6 +54,7 @@ class LSTM_model:
         n_mixture = parser.getint('lstm', 'n_mixture')
         n_layers = parser.getint('lstm', 'n_lstm_layers')
         n_channels = parser.getint('convolution', 'n_channels')
+        self.p_end_loss_weight = parser.getfloat('nn', 'p_end_loss_weight')
         self.clipping = parser.getboolean('nn', 'gradient_clipping')
         self.learning_rate = parser.getfloat('nn', 'learning_rate')
         if train:
@@ -241,14 +244,14 @@ class LSTM_model:
                     cells.append(cell)
                 stack = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=True)
 
-                self._initial_state = self.encoder_final_state
-                # if train:
-                #     self._initial_state = self.encoder_final_state
-                # else:
-                #     state_placeholder = tf.placeholder(dtype = tf.float32, shape = [n_layers, 2, None, n_cell_dim], name = 'packed_init_state')
-                #     unpack_state_placeholder = tf.unstack(state_placeholder, axis=0)
-                #     self._initial_state = tuple([tf.nn.rnn_cell.LSTMStateTuple(unpack_state_placeholder[idx][0],
-                #                                                                unpack_state_placeholder[idx][1]) for idx in range(n_layers)])
+                # self._initial_state = self.encoder_final_state
+                if train:
+                    self._initial_state = self.encoder_final_state
+                else:
+                    state_placeholder = tf.placeholder(dtype = tf.float32, shape = [n_layers, 2, None, n_cell_dim], name = 'packed_init_state')
+                    unpack_state_placeholder = tf.unstack(state_placeholder, axis=0)
+                    self._initial_state = tuple([tf.nn.rnn_cell.LSTMStateTuple(unpack_state_placeholder[idx][0],
+                                                                               unpack_state_placeholder[idx][1]) for idx in range(n_layers)])
 
                 decoder_outputs, self.decode_final_state = tf.nn.dynamic_rnn(cell = stack, 
                                                                              inputs = layer_emb_decode,
@@ -291,7 +294,7 @@ class LSTM_model:
             return
 
         with tf.name_scope('loss'):
-            self.total_loss, self.avg_loss = self.setup_loss(target, n_mixture, n_controled_var)
+            self.total_loss, self.avg_loss = self.setup_loss(target, target_end, target_end_neg, n_mixture, n_controled_var)
         # setup optimizer
         with tf.name_scope('training_optimizer'):
             train_ops = tf.train.MomentumOptimizer(learning_rate=self.learning_rate,
@@ -308,17 +311,32 @@ class LSTM_model:
             self.summary_op = tf.summary.merge_all()
         return
 
-    def setup_loss(self, target, n_mixture, n_controled_var):
-        target_tile = self.reshape_target(target, n_mixture, n_controled_var)
-        p_i = self.MVN_pdf.prob(target_tile)
-        loss = -tf.reduce_sum(tf.log(1e-7+tf.reduce_sum(tf.multiply(self.pi_layer, p_i), axis = 1))) 
+    def setup_loss(self, target, target_end, target_end_neg, n_mixture, n_controled_var):
+        target_tile, target_end, target_end_neg = self.reshape_target(target, target_end, target_end_neg, n_mixture, n_controled_var)
+        self.p_end = tf.abs(tf.multiply(self.end_layer, target_end)) + tf.abs(tf.multiply(1. - self.end_layer, target_end_neg) )
+        # shape of [batch*time, 1]
+
+        p_i = self.MVN_pdf.prob(target_tile) # shape of [batch * time, n_mixture]
+        # loss = -(tf.log(1e-7 + tf.reduce_sum(tf.multiply(self.pi_layer, p_i), axis = 1)))
+        self.MNV_loss =  - tf.log(1e-7 + tf.reduce_sum(tf.multiply(self.pi_layer, p_i), axis = 1, keepdims=True))
+        self.p_end_loss = - tf.log(1e-7 + self.p_end)
+        loss = self.MNV_loss * (1 - self.p_end_loss_weight) + self.p_end_loss * self.p_end_loss_weight
+        # loss = -(tf.log(1e-7 + tf.reduce_sum(tf.multiply(self.pi_layer, p_i), axis = 1)) + 
+        #          tf.log(1e-7 + self.p_end))
+        total_loss = tf.reduce_sum(loss)
         avg_loss = tf.reduce_mean(loss)
-        return loss, avg_loss
+        return total_loss, avg_loss
     
-    def reshape_target(self, target, n_mixture, n_controled_var):
+    def reshape_target(self, target, target_end, target_end_neg, n_mixture, n_controled_var):
         # target has shape of [batch,time, n_controled_var]
-        target_tile = tf.reshape(tf.tile(tf.reshape(target, (-1, n_controled_var)), multiples=[1, n_mixture]), (-1, n_mixture, n_controled_var))
-        return target_tile
+        # target_tile has shape of [batch * time, n_mixture, n_controled_var]
+        target_tile = tf.reshape(tf.tile(tf.reshape(target, 
+                                                    (-1, n_controled_var)), 
+                                         multiples=[1, n_mixture]), 
+                                (-1, n_mixture, n_controled_var))
+        target_end = tf.reshape(target_end, (-1, 1))
+        target_end_neg = tf.reshape(target_end_neg, (-1, 1))
+        return target_tile, target_end, target_end_neg
 
 def get_mixture_coef(layer_out, n_mixture, n_controled_var):
     n_cov_trig = sum(range(n_controled_var + 1))

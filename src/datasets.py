@@ -40,61 +40,76 @@ class DatasetEncoderDecoder:
 
         self.all_tracks, \
          self.all_targets, \
-          self.all_seq_lens, \
-           self.data_mean, \
-            self.data_std, \
-             self.all_FP_tracks, \
-              self.all_seq_lens_FP, \
-               self.FP_mean, \
-                self.FP_std, \
-                 self.tracks_time_id_info = self.load_track_data()
+          self.all_targets_end, \
+           self.all_targets_end_neg, \
+            self.all_seq_lens, \
+             self.data_mean, \
+              self.data_std, \
+               self.all_FP_tracks, \
+                self.all_seq_lens_FP, \
+                 self.FP_mean, \
+                  self.FP_std, \
+                   self.tracks_time_id_info = self.load_track_data()
 
         self.feature_cubes, self.feature_cubes_mean, self.feature_cubes_std = self.load_feature_cubes()
         self.feature_cubes = np.split(self.feature_cubes, np.cumsum(self.all_seq_lens))[:-1]
 
         if self.shuffle_or_not:
             self.all_tracks, \
-             self.all_targets, \
-              self.all_seq_lens, \
-                self.all_FP_tracks, \
+             self.all_targets,\
+              self.all_targets_end,\
+               self.all_targets_end_neg,\
+                self.all_seq_lens, \
+                 self.all_FP_tracks, \
                   self.all_seq_lens_FP, \
-                    self.feature_cubes, \
-                      self.tracks_time_id_info = shuffle(self.all_tracks, 
-                                                         self.all_targets,
-                                                         self.all_seq_lens, 
-                                                         self.all_FP_tracks, 
-                                                         self.all_seq_lens_FP, 
-                                                         self.feature_cubes,
-                                                         self.tracks_time_id_info,
-                                                         random_state = 101)
+                   self.feature_cubes,\
+                    self.tracks_time_id_info = shuffle(self.all_tracks, 
+                                                       self.all_targets,
+                                                       self.all_targets_end,
+                                                       self.all_targets_end_neg,
+                                                       self.all_seq_lens, 
+                                                       self.all_FP_tracks, 
+                                                       self.all_seq_lens_FP, 
+                                                       self.feature_cubes,
+                                                       self.tracks_time_id_info,
+                                                       random_state = 101)
 
         if self.split:
             self.train_tracks, \
              self.dev_tracks, \
               self.train_targets, \
                self.dev_targets, \
-                self.train_seq_lens, \
-                 self.dev_seq_lens, \
-                  self.train_FP_tracks, \
-                   self.dev_FP_tracks, \
-                    self.train_seq_lens_FP, \
-                     self.dev_seq_lens_FP, \
-                      self.train_feature_cubes, \
-                       self.dev_feature_cubes, \
-                        self.train_tracks_time_id_info, \
-                         self.dev_tracks_time_id_info = train_test_split(self.all_tracks,
-                                                                       self.all_targets, 
-                                                                       self.all_seq_lens, 
-                                                                       self.all_FP_tracks,
-                                                                       self.all_seq_lens_FP,
-                                                                       self.feature_cubes,
-                                                                       self.tracks_time_id_info,
-                                                                       random_state = 101, 
-                                                                       train_size = 0.8,
-                                                                       test_size = None)
+                self.train_targets_end, \
+                 self.dev_targets_end, \
+                  self.train_targets_end_neg, \
+                   self.dev_targets_end_neg, \
+                    self.train_seq_lens, \
+                     self.dev_seq_lens, \
+                      self.train_FP_tracks, \
+                       self.dev_FP_tracks, \
+                        self.train_seq_lens_FP, \
+                         self.dev_seq_lens_FP, \
+                          self.train_feature_cubes, \
+                           self.dev_feature_cubes, \
+                            self.train_tracks_time_id_info, \
+                             self.dev_tracks_time_id_info = train_test_split(self.all_tracks,
+                                                                             self.all_targets,
+                                                                             self.all_targets_end,
+                                                                             self.all_targets_end_neg, 
+                                                                             self.all_seq_lens, 
+                                                                             self.all_FP_tracks,
+                                                                             self.all_seq_lens_FP,
+                                                                             self.feature_cubes,
+                                                                             self.tracks_time_id_info,
+                                                                             random_state = 101, 
+                                                                             train_size = 0.8,
+                                                                             test_size = None)
 
-        self.train_targets = _pad(self.train_targets, self.train_seq_lens) 
         self.train_tracks = _pad(self.train_tracks, self.train_seq_lens)
+        self.train_targets = _pad(self.train_targets, self.train_seq_lens) 
+        self.train_targets_end = _pad(self.train_targets_end, self.train_seq_lens) 
+        self.train_targets_end_neg = _pad(self.train_targets_end_neg, self.train_seq_lens) 
+        
         self.train_feature_cubes = _pad(self.train_feature_cubes, self.train_seq_lens)
         self.n_train_data_set = self.train_tracks.shape[0]
     def __str__(self):
@@ -134,7 +149,7 @@ class DatasetEncoderDecoder:
         tracks_split = np.split(tracks, np.cumsum(seq_length_tracks))[:-1]
 
         # add the arrival information to construct the target sequence
-        targets_split = self._construct_target(tracks_split, avg, std_err)
+        targets_split, targets_end_split, targets_end_split_neg = self._construct_target(tracks_split, avg, std_err)
 
         FP_track_order = track_data_with_FP.groupby('FID')[['FID', 'Elap_Time', 'FP_tracks', 'seq_len']].head(1)
         seq_length_FP = FP_track_order.seq_len.values.astype(np.int32)
@@ -146,10 +161,12 @@ class DatasetEncoderDecoder:
         FP_tracks_split = _pad_and_flip_FP(FP_tracks_split, seq_length_FP)
 
         # all standardized
-        return tracks_split, targets_split, seq_length_tracks, avg, std_err, FP_tracks_split, seq_length_FP, avg_FP, std_err_FP, tracks_time_id_info
+        return tracks_split, targets_split, targets_end_split, targets_end_split_neg, seq_length_tracks, avg, std_err, FP_tracks_split, seq_length_FP, avg_FP, std_err_FP, tracks_time_id_info
 
     def _construct_target(self, splitted_tracks, avg, std_err):
         tmp_list = []
+        tmp_end_list = []
+        tmp_end_list_neg = []
         for target_seq in splitted_tracks:
             # print(target_seq.shape)
             # print(avg.shape)
@@ -159,8 +176,12 @@ class DatasetEncoderDecoder:
                                                                           0,
                                                                           0, 
                                                                           0, 
-                                                                          0]]) - avg)/std_err), axis = 0))
-        return tmp_list
+                                                                          0 - self.direct_course]]) - avg)/std_err), axis = 0))
+            tmp_arr = np.zeros((target_seq.shape[0], 1))
+            tmp_arr[-1, 0] = 1.
+            tmp_end_list.append(tmp_arr)
+            tmp_end_list_neg.append(1 - tmp_arr)
+        return tmp_list, tmp_end_list, tmp_end_list_neg
 
 
     def load_feature_cubes(self):
@@ -198,6 +219,8 @@ class DatasetEncoderDecoder:
             batch_seq_lens = self.train_seq_lens[idx_list[self.idx:endidx]]
             batch_inputs = self.train_tracks[idx_list[self.idx:endidx], :, :]
             batch_targets = self.train_targets[idx_list[self.idx:endidx], :, :]
+            batch_targets_end = self.train_targets_end[idx_list[self.idx:endidx], :, :]
+            batch_targets_end_neg = self.train_targets_end_neg[idx_list[self.idx:endidx], :, :]
 
             batch_seq_lens_FP = self.train_seq_lens_FP[idx_list[self.idx:endidx]]
             batch_inputs_FP = self.train_FP_tracks[idx_list[self.idx:endidx], :, :]
@@ -206,8 +229,15 @@ class DatasetEncoderDecoder:
 
             self.idx += self.batch_size
             
-        return batch_inputs, batch_targets, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes
-            
+        return batch_inputs, batch_targets, batch_targets_end, batch_targets_end_neg, batch_seq_lens, batch_inputs_FP, batch_seq_lens_FP, batch_inputs_feature_cubes
+
+#######################################################################################################
+#######################################################################################################
+#######################################################################################################
+#######################################################################################################
+#######################################################################################################
+#######################################################################################################
+
 from utils_features import match_wind_fname, match_ncwf_fname, flight_track_feature_generator, proxilvl
 from utils import g, baseline_time
 class DatasetSample(flight_track_feature_generator):
@@ -243,7 +273,7 @@ class DatasetSample(flight_track_feature_generator):
         self.arr_lat = kwargs.get('arr_lat', 42.3666666667)
         self.arr_lon = kwargs.get('arr_lon', -70.9666666667)
 
-        self.direct_course = kwargs.get('direct_course', g.inv(self.dep_lon, self.dep_lat, self.arr_lon, self.arr_lat)[0]* np.pi/180)
+        self.direct_course = kwargs.get('direct_course', g.inv(self.dep_lon, self.dep_lat, self.arr_lon, self.arr_lat)[0] * np.pi/180)
 
         super().__init__(flight_track_dir = test_track_dir,
                          flight_plan_dir = test_fp_dir,
