@@ -3,7 +3,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]="-1"
 import numpy as np
 import tensorflow as tf
 from configparser import ConfigParser
-from rnn_encoder_decoder import LSTM_model
+from rnn_encoder_decoder_endlayer import LSTM_model
 from datasets import DatasetEncoderDecoder, DatasetSample, _pad_and_flip_FP
 import logging
 import time
@@ -57,6 +57,15 @@ class trainRNN:
                                                      batch_size = self.batch_size,
                                                      dep_lat = 29.98333333,
                                                      dep_lon = -95.33333333)
+            np.savez('../../DATA/DeepTP/standardize_arr.npz', 
+                     track_mean = self.cpu_dataset.data_mean, 
+                     track_std = self.cpu_dataset.data_std,
+                     fp_mean = self.cpu_dataset.FP_mean, 
+                     fp_std = self.cpu_dataset.FP_std, 
+                     feature_mean = self.cpu_dataset.feature_cubes_mean, 
+                     feature_std = self.cpu_dataset.feature_cubes_std,
+                     train_tracks_time_id_info = self.cpu_dataset.train_tracks_time_id_info,
+                     dev_tracks_time_id_info = self.cpu_dataset.dev_tracks_time_id_info)
         else:
             self.std_arr_loader = np.load('../../DATA/DeepTP/standardize_arr.npz')
             self.std_arr_loader['track_mean']
@@ -95,7 +104,7 @@ class trainRNN:
         self.clipping = parser.getboolean(config_header, 'gradient_clipping')
         self.shuffle_data_after_epoch = parser.getboolean(config_header, 'shuffle_data_after_epoch')
         # set the session name
-        self.session_name = '{}_{}'.format('Encoder_decoder_LSTM', time.strftime("%Y%m%d-%H%M%S"))
+        self.session_name = '{}_{}'.format('Pend_Layer_Encoder_decoder_LSTM', time.strftime("%Y%m%d-%H%M%S"))
         sess_prefix_str = 'develop'
         if len(sess_prefix_str) > 0:
             self.session_name = '{}_{}'.format(sess_prefix_str, self.session_name)
@@ -150,7 +159,7 @@ class trainRNN:
                 self.writer = tf.summary.FileWriter(self.SUMMARY_DIR, graph=self.sess.graph)
 
             # Add ops to save and restore all the variables
-            self.saver = tf.train.Saver(max_to_keep=30)
+            self.saver = tf.train.Saver(max_to_keep=40)
             section = '\n{0:=^40}\n'
             if self.restored_model_path is None:
                 self.sess.run(tf.global_variables_initializer())
@@ -209,8 +218,8 @@ class trainRNN:
                         # width = 10 # 30, 300, 0.1
                         # keep_search = 10
                         search_power = 2
-                        debug = True
-                        weights = 0.9
+                        debug = False
+                        weights = 0.25
                         with tf.device('/cpu:0'):
                             # predicted_tracks, \
                             #  final_top_k_idx_seq, \
@@ -232,7 +241,7 @@ class trainRNN:
                              predicted_tracks_cov, \
                               buffer_total_logprob, \
                                buffer_pi_prob, \
-                                predicted_matched_info = self.sample_seq_mu_cov(start_tracks = tracks_split, 
+                                prob_end = self.sample_seq_mu_cov(start_tracks = tracks_split, 
                                                                                 start_tracks_feature_cubes = start_tracks_feature_cubes,
                                                                                 normalized_flight_plan = fp_tracks_split, 
                                                                                 flight_plan_length = fp_seq_length,
@@ -253,7 +262,7 @@ class trainRNN:
                         #     pickle.dump((predicted_tracks, final_top_k_idx_seq, buffer_total_logprob, mus, covs), wpkl)
                         # print('Finished sampling. File dumped to ../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100))
                         with open('debug_file/samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100), 'wb') as wpkl:
-                            pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info), wpkl)
+                            pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob, prob_end), wpkl)
                         print('Finished sampling. File dumped to debug_file/samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100))
                     else:
                         pass
@@ -311,10 +320,16 @@ class trainRNN:
             log = 'Epoch {}/{}, train_cost: {:.3f}, elapsed_time: {:.2f} sec \n'
             logger.info(log.format(epoch + 1, self.epochs, train_epoch_loss, epoch_elap_time))
 
-            if (epoch+1) % 300 == 0:
-                # print('learning rate is %f'%self.MODEL.learning_rate)
-                self.MODEL.learning_rate = self.MODEL.learning_rate * 0.5
-                logger.info('Learning rate decaying... Now is: {:.7f}'.format(self.MODEL.learning_rate))
+            if epoch + 1 <= 1500:
+                if (epoch + 1) % 500 == 0:
+                    # print('learning rate is %f'%self.MODEL.learning_rate)
+                    self.MODEL.learning_rate = self.MODEL.learning_rate * 0.5
+                    logger.info('Learning rate decaying... Now is: {:.7f}'.format(self.MODEL.learning_rate))
+            else:
+                if (epoch + 1) % 300 == 0:
+                    # print('learning rate is %f'%self.MODEL.learning_rate)
+                    self.MODEL.learning_rate = self.MODEL.learning_rate * 0.5
+                    logger.info('Learning rate decaying... Now is: {:.7f}'.format(self.MODEL.learning_rate))
 
             if (epoch + 1 == self.epochs) or is_checkpoint_step:
                 # summary_line = self.sess.run(self.loss_summary, feed_dict = {self.loss_placeholder: train_epoch_loss})
@@ -591,258 +606,6 @@ class trainRNN:
         final_seq = np.array(final_seq)
         return final_seq
 
-    # def sample_seq(self, 
-    #                start_tracks, # normalized
-    #                start_tracks_feature_cubes, # normalized
-    #                normalized_flight_plan, 
-    #                flight_plan_length, 
-    #                max_length = 100, 
-    #                beam_search = True, 
-    #                width = 10, 
-    #                weights = 0.1,
-    #                keep_search = 50,
-    #                debug = False):
-    #     # start_tracks should have the shape of [n_sample, n_time, n_input]
-    #     # normalized_flight_plan should have the shape of [n_sample, n_time, n_input] (also flipped)
-    #     # normalized_flight_plan should be (flight_plan - [dep_lat, dep_lon] - fp_mu)/fp_std; and then pad_and_flip
-    #     # for each sample in the start_tracks, it should have the same length
-    #     # flight_plan_length should have the shape of [n_sample]
-    #     # fp_tracks = (flight_plan - fp_mu)/fp_std
-    #     n_seq, n_time, _ = start_tracks.shape
-    #     if not beam_search:
-    #         width = 1
-    #         keep_search = 1
-    #     buffer_size = width * keep_search
-
-    #     buffer_track = np.repeat(start_tracks, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 4]; duplicate of seq_1, then seq_2, ...
-    #     buffer_fp = np.repeat(normalized_flight_plan, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 2]; duplicate of seq_1, then seq_2, ...
-    #     buffer_fp_len = np.repeat(flight_plan_length, buffer_size) # shape of [n_seq*buffer_size,]
-    #     buffer_total_logprob = np.zeros(shape = (buffer_size * n_seq, 1), dtype = np.float32) # shape of [n_seq*buffer_size,1]
-
-    #     # # # init_state = np.zeros(shape = (self.n_layer, 2, n_seq, self.state_size))
-    #     # tmp_feed = {
-    #     #              # self.input_tensor: buffer_track,
-    #     #              # self.seq_length: [n_time]*n_seq*buffer_size,
-    #     #              self.input_encode_tensor: buffer_fp,
-    #     #              self.seq_len_encode: buffer_fp_len}
-    #     # encoder_state0 = self.sess.run(self.MODEL.encoder_final_state, feed_dict = tmp_feed) # should have the size of (buffer_size*n_seq) tuples
-        
-    #     feeds = {self.input_tensor: start_tracks_feature_cubes,
-    #              self.seq_length: [n_time]*n_seq*buffer_size,
-    #              self.input_encode_tensor: buffer_fp,
-    #              self.seq_len_encode: buffer_fp_len}
-
-    #     state, encoder_state = self.sess.run([self.MODEL.decode_final_state, self.MODEL._initial_state], feed_dict = feeds)
-    #     if debug:
-    #         with open('debug_file/encoder_state_debug.pkl', 'wb') as f:
-    #                 pickle.dump((state, encoder_state), f)
-
-
-    #     last_input_track_point = buffer_track[:, -1, None]   # shape of [n_seq*buffersize, 1, 4]
-
-    #     pi_sample_tensor = tf.multinomial(logits = self.MODEL.pi_layer, num_samples = 1, output_dtype = tf.int32)
-    #     coords_sample_tensor = self.MODEL.MVN_pdf.sample()
-    #     coords_logprob_tensor = self.MODEL.MVN_pdf.log_prob(coords_sample_tensor)
-
-    #     # coords_mu = self.MODEL.mu_layer
-    #     coords_cov_tensor = tf.matmul(self.MODEL.L_layer, self.MODEL.L_layer, transpose_b = True)
-    #     # predicted_tracks = np.repeat(start_tracks, width, axis = 0)
-    #     top_k_idx_seq = []
-    #     all_mus = []
-    #     all_covs = []
-    #     for i in range(max_length):
-    #         # self.MODEL._initial_state = state
-    #         feeds_update = {self.input_tensor: last_input_track_point,
-    #                         self.seq_length: [1]*n_seq*buffer_size,
-    #                         self.input_encode_tensor: buffer_fp,
-    #                         self.seq_len_encode: buffer_fp_len,
-    #                         self.MODEL._initial_state: state}
-    #         if (i == 0) and (debug is True):
-    #             with open('debug_file/init_state_debug.pkl', 'wb') as f:
-    #                 pickle.dump((state), f)
-    #         state, pi_logprob, coords_sample, pi_sample, coords_logprob, coords_mu, coords_cov = self.sess.run([self.MODEL.decode_final_state, 
-    #                                                                                                              tf.log(self.MODEL.pi_layer), 
-    #                                                                                                              coords_sample_tensor, 
-    #                                                                                                              pi_sample_tensor, 
-    #                                                                                                              coords_logprob_tensor,
-    #                                                                                                              self.MODEL.mu_layer,
-    #                                                                                                              coords_cov_tensor], feed_dict = feeds_update)
-    #         # print(pi_sample.flatten()[:5])
-    #         # print(coords_sample[:5, :, :])
-    #         """
-    #         state: tuple with size n_layers, each is a LSTMtuple object; state[0].c.shape = (n_seq*buffersize, 256); state[0].h.shape = (n_seq*buffersize, 256);
-    #         pi_logprob: np array with size (n_seq*buffersize, n_mixture)
-    #         coords_sample: np array with size (n_seq*buffersize, n_mixture, 4)
-    #         pi_sample: np array with size (n_seq * buffersize, 1)
-    #         coords_logprob: np array with size (n_seq*buffersize, n_mixture)
-    #         """
-    #         if (i == 0) and (debug is True):
-    #             with open('debug_file/inner_loop_debug.pkl', 'wb') as f:
-    #                 pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, coords_mu, coords_cov), f)
-
-    #         pi_logprob_sample = pi_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
-    #         coords_logprob_sample = coords_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
-    #         # total_log_prob = np.sum(pi_logprob, axis = 1, keepdims=True) + np.sum(coords_logprob, axis = 1, keepdims=True)
-    #         # buffer_total_logprob += (pi_logprob_sample/np.sum(pi_logprob, axis = 1, keepdims=True) + coords_logprob_sample/np.sum(coords_logprob, axis = 1, keepdims=True)) # has shape of [buffer_size*n_seq, 1]
-    #         buffer_total_logprob += (pi_logprob_sample*weights + coords_logprob_sample*(1-weights))/(0.95**i) # has shape of [buffer_size*n_seq, 1]
-    #         # select top k sequence
-    #         tmp_buffer_total_logprob = buffer_total_logprob.reshape(n_seq, buffer_size, 1)
-    #         top_k_idx = np.argsort(tmp_buffer_total_logprob, axis = 1)[:, (-width):,:] + (np.repeat(range(n_seq), width)*buffer_size).reshape(n_seq, width, 1)
-    #         top_k_idx = top_k_idx.reshape(-1)
-    #         top_k_idx_seq.append(top_k_idx)
-
-    #         top_k_logprob = buffer_total_logprob[top_k_idx]
-    #         selected_coords = coords_sample[top_k_idx, pi_sample[top_k_idx].flatten(), None] # shape of [width*n_seq, 1, 4]
-    #         selected_coords_mu = coords_mu[top_k_idx, pi_sample[top_k_idx].flatten(), None] # shape of [width*n_seq, 1, 4]
-    #         selected_coords_cov = coords_cov[top_k_idx, pi_sample[top_k_idx].flatten(), :] # shape of [width*n_seq, 1, 2, 2]
-            
-    #         state = tuple([tf.nn.rnn_cell.LSTMStateTuple(c = np.repeat(tmp_state.c[top_k_idx], keep_search, axis = 0), 
-    #                                                      h = np.repeat(tmp_state.h[top_k_idx], keep_search, axis = 0)) for tmp_state in state])
-            
-    #         last_input_track_point = np.repeat(selected_coords, keep_search, axis = 0) # shape of [n_seq*buffersize, 1, 4]
-    #         buffer_total_logprob = np.repeat(top_k_logprob, keep_search, axis = 0)
-    #         # last_input_track_point = param_sample[range(buffer_size*n_seq), pi_sample.flatten()].reshape(n_seq, 1, -1)
-    #         buffer_track = np.concatenate((buffer_track, last_input_track_point), axis = 1)
-
-    #         all_mus.append(np.repeat(selected_coords_mu, keep_search, axis = 0))
-    #         all_covs.append(np.repeat(selected_coords_cov, keep_search, axis = 0))
-
-    #     all_mus = np.array(all_mus)
-    #     all_covs = np.array(all_covs)
-    #     all_mus = all_mus * standard_std + standard_mu # shape of [max_length, n_seq*width, 1, 4]
-    #     all_covs = all_covs * (standard_std**2) # shape of [max_length, n_seq*width, 1, 4, 4]
-    
-    #     top_k_idx_seq = np.array(top_k_idx_seq) # shape of [max_length, n_seq*width]
-    #     final_tracks = (buffer_track * standard_std) + standard_mu # shape of [n_seq*buffersize, maxLlenth+init_len, 4]
-
-    #     final_top_k_idx_seq = self.arrange_top_k(top_k_idx_seq, keep_search) # shape of [max_lenth, n_seq*width]
-    #     final_tracks = final_tracks[final_top_k_idx_seq[::-1].T, range(n_time, max_length + n_time)]  # shape of [n_seq*width, max_length, 4]
-
-    #     a = np.transpose(all_covs, [1, 0, 2, 3])
-    #     b = np.transpose(all_mus, [1, 0, 2,3])
-    #     final_covs = a[final_top_k_idx_seq[::-1].T, range(max_length)]
-    #     final_mus = b[final_top_k_idx_seq[::-1].T, range(max_length)].reshape(n_seq*width, max_length, -1)
-
-    #     if debug:
-    #         with open('debug_file/outer_loop_debug.pkl', 'wb') as f:
-    #             pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, final_tracks, top_k_idx_seq, buffer_total_logprob, all_mus, all_covs), f)
-    #     return final_tracks, final_top_k_idx_seq, buffer_total_logprob, final_mus, final_covs
-
-
-
-    # def sample_seq_kalman_filter_greedy(self, 
-    #                                     start_tracks, 
-    #                                     standard_mu, 
-    #                                     standard_std, 
-    #                                     normalized_flight_plan, 
-    #                                     flight_plan_length, 
-    #                                     max_length = 100,
-    #                                     beam_search = False,
-    #                                     width = 50,
-    #                                     keep_search = 50
-    #                                     ):
-    #     # start_tracks should have the shape of [n_sample, n_time, n_input]
-    #     # normalized_flight_plan should have the shape of [n_sample, n_time, n_input] (also flipped)
-    #     # normalized_flight_plan should be (flight_plan - [dep_lat, dep_lon] - fp_mu)/fp_std; and then pad_and_flip
-    #     # for each sample in the start_tracks, it should have the same length
-    #     # flight_plan_length should have the shape of [n_sample]
-    #     start_tracks = (start_tracks - standard_mu)/standard_std
-    #     # fp_tracks = (flight_plan - fp_mu)/fp_std
-    #     n_seq, n_time, _ = start_tracks.shape
-    #     if not beam_search:
-    #         width = 1
-    #         keep_search = 1
-    #     buffer_size = width * keep_search
-
-    #     buffer_track = np.repeat(start_tracks, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 4]; duplicate of seq_1, then seq_2, ...
-    #     buffer_fp = np.repeat(normalized_flight_plan, buffer_size, axis = 0) # shape of [n_seq*buffer_size, n_time, 2]; duplicate of seq_1, then seq_2, ...
-    #     buffer_fp_len = np.repeat(flight_plan_length, buffer_size) # shape of [n_seq*buffer_size,]
-    #     buffer_total_logprob = np.zeros(shape = (buffer_size * n_seq, 1), dtype = np.float32) # shape of [n_seq*buffer_size,1]
-
-    #     # # # init_state = np.zeros(shape = (self.n_layer, 2, n_seq, self.state_size))
-    #     # tmp_feed = {
-    #     #              # self.input_tensor: buffer_track,
-    #     #              # self.seq_length: [n_time]*n_seq*buffer_size,
-    #     #              self.input_encode_tensor: buffer_fp,
-    #     #              self.seq_len_encode: buffer_fp_len}
-    #     # encoder_state0 = self.sess.run(self.MODEL.encoder_final_state, feed_dict = tmp_feed) # should have the size of (buffer_size*n_seq) tuples
-        
-    #     feeds = {self.input_tensor: buffer_track,
-    #              self.seq_length: [n_time]*n_seq*buffer_size,
-    #              self.input_encode_tensor: buffer_fp,
-    #              self.seq_len_encode: buffer_fp_len}
-
-    #     state, encoder_state = self.sess.run([self.MODEL.decode_final_state, self.MODEL._initial_state], feed_dict = feeds)
-    #     # with open('debug_file/encoder_state_debug.pkl', 'wb') as f:
-    #     #         pickle.dump((state, encoder_state), f)
-
-
-    #     last_input_track_point = buffer_track[:, -1, None]   # shape of [n_seq*buffersize, 1, 4]
-
-    #     pi_sample_tensor = tf.multinomial(logits = self.MODEL.pi_layer, num_samples = 1, output_dtype = tf.int32)
-
-    #     coords_mu = self.MODEL.mu_layer
-    #     coords_cov = tf.matmul(self.MODEL.L_layer, self.MODEL.L_layer, transpose_b = True)
-
-
-    #     coords_sample_tensor = self.MODEL.MVN_pdf.sample()
-    #     coords_logprob_tensor = self.MODEL.MVN_pdf.log_prob(coords_sample_tensor)
-    #     # predicted_tracks = np.repeat(start_tracks, width, axis = 0)
-    #     top_k_idx_seq = []
-    #     for i in range(max_length):
-    #         # self.MODEL._initial_state = state
-    #         feeds_update = {self.input_tensor: last_input_track_point,
-    #                         self.seq_length: [1]*n_seq*buffer_size,
-    #                         self.input_encode_tensor: buffer_fp,
-    #                         self.seq_len_encode: buffer_fp_len,
-    #                         self.MODEL._initial_state: state}
-    #         # if i == 10:
-    #         #     with open('debug_file/init_state_debug.pkl', 'wb') as f:
-    #         #         pickle.dump((state), f)
-    #         state, pi_logprob, coords_sample, pi_sample, coords_logprob = self.sess.run([self.MODEL.decode_final_state, 
-    #                                                                                      tf.log(self.MODEL.pi_layer), 
-    #                                                                                      coords_sample_tensor, 
-    #                                                                                      pi_sample_tensor, 
-    #                                                                                      coords_logprob_tensor], feed_dict = feeds_update)
-    #         """
-    #         state: tuple with size 3, each is a LSTMtuple object; state[0].c.shape = (n_seq*buffer_size, 256); state[0].h.shape = (50, 256);
-    #         pi_logprob: np array with size (n_seq*buffersize, n_mixture)
-    #         coords_sample: np array with size (n_seq*buffersize, n_mixture, 4)
-    #         pi_sample: np array with size (n_seq * buffersize, 1)
-    #         coords_logprob: np array with size (n_seq*buffersize, n_mixture)
-    #         """
-    #         # if i == 10:
-    #         #     with open('debug_file/inner_loop_debug.pkl', 'wb') as f:
-    #         #         pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, init_state), f)
-
-    #         pi_logprob = pi_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
-    #         coords_logprob = coords_logprob[range(buffer_size*n_seq), pi_sample.flatten(), None] # [n_seq*buffersize, 1]
-    #         buffer_total_logprob += (pi_logprob + coords_logprob) # has shape of [buffer_size*n_seq, 1]
-    #         # select top k sequence
-    #         tmp_buffer_total_logprob = buffer_total_logprob.reshape(n_seq, buffer_size, 1)
-    #         top_k_idx = np.argsort(tmp_buffer_total_logprob, axis = 1)[:, (-width):,:] + (np.repeat(range(n_seq), width)*buffer_size).reshape(n_seq, width, 1)
-    #         top_k_idx = top_k_idx.reshape(-1)
-    #         top_k_idx_seq.append(top_k_idx)
-
-    #         top_k_logprob = buffer_total_logprob[top_k_idx]
-    #         selected_coords = coords_sample[top_k_idx, pi_sample[top_k_idx].flatten(), None] # shape of [width*n_seq, 1, 4]
-            
-    #         state = tuple([tf.nn.rnn_cell.LSTMStateTuple(c = np.repeat(tmp_state.c[top_k_idx], keep_search, axis = 0), 
-    #                                                      h = np.repeat(tmp_state.h[top_k_idx], keep_search, axis = 0)) for tmp_state in state])
-            
-    #         last_input_track_point = np.repeat(selected_coords, keep_search, axis = 0) # shape of [n_seq*buffersize, 1, 4]
-    #         buffer_total_logprob = np.repeat(top_k_logprob, keep_search, axis = 0)
-    #         # last_input_track_point = param_sample[range(buffer_size*n_seq), pi_sample.flatten()].reshape(n_seq, 1, -1)
-    #         buffer_track = np.concatenate((buffer_track, last_input_track_point), axis = 1)
-    #     top_k_idx_seq = np.array(top_k_idx_seq) # shape of [max_length, n_seq*width]
-    #     final_tracks = (buffer_track * standard_std) + standard_mu
-
-    #     final_top_k_idx_seq = self.arrange_top_k(top_k_idx_seq, keep_search)
-    #     final_tracks = final_tracks[final_top_k_idx_seq[::-1].T, range(n_time, max_length + n_time)]
-    #     # with open('debug_file/outer_loop_debug.pkl', 'wb') as f:
-    #     #     pickle.dump((state, pi_logprob, coords_sample, pi_sample, coords_logprob, final_tracks, top_k_idx_seq, buffer_total_logprob), f)
-    #     return final_tracks, final_top_k_idx_seq, buffer_total_logprob
-
 
 # to run in console
 if __name__ == '__main__':
@@ -876,7 +639,7 @@ if __name__ == '__main__':
         except:     
             pass
 
-        log_name = '{}_{}_{}'.format('log/log', train_or_predict, time.strftime("%Y%m%d-%H%M%S"))
+        log_name = '{}_{}_{}'.format('log/Pend_layer_log', train_or_predict, time.strftime("%Y%m%d-%H%M%S"))
         logging.basicConfig(level=logging.DEBUG,
                             format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
                             filename=log_name + '.log',
