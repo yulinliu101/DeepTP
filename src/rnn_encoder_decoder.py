@@ -44,8 +44,6 @@ class LSTM_model:
                  seq_length_decode, 
                  n_input_decode, # side size of the image
                  target, 
-                 target_end,
-                 target_end_neg,
                  train = True, 
                  weight_summary = False):
 
@@ -58,7 +56,7 @@ class LSTM_model:
         self.clipping = parser.getboolean('nn', 'gradient_clipping')
         self.learning_rate = parser.getfloat('nn', 'learning_rate')
         if train:
-            dropout = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+            dropout = [0.5, 0.5, 0., 0.5, 0.5, 0.5, 0.5]
         else:
             dropout = [0., 0., 0., 0., 0., 0., 0.]
 
@@ -104,7 +102,7 @@ class LSTM_model:
         # n_hidden_4 = parser.getint('lstm', 'n_hidden_4')
         n_controled_var = parser.getint('lstm', 'n_controled_var')
         n_prob_param = 1 + n_controled_var + sum(range(n_controled_var+1)) # 1 (pi) + number of elements in (mean vector + upper trig of cov)
-        n_out = n_prob_param * n_mixture + 1 # ... + 1 (p_end)
+        n_out = n_prob_param * n_mixture # ... remove p_end layer
 
         # Input shape: [batch_size, n_steps, n_input]
         # # n_input is the # of (original) features per frame: default to be 26
@@ -123,8 +121,9 @@ class LSTM_model:
                                     [n_input, n_hidden_1],
                                     tf.random_normal_initializer(stddev=h1_stddev))
             layer_emb = tf.nn.elu(tf.nn.xw_plus_b(batch_x, h1, b1))
+            
             # layer_emb = tf.minimum(tf.nn.relu(tf.add(tf.matmul(batch_x, h1), b1)), relu_clip)
-            layer_emb = tf.nn.dropout(layer_emb, (1.0 - dropout[0]))
+            # layer_emb = tf.nn.dropout(layer_emb, (1.0 - dropout[0]))
 
             if train and weight_summary:
                 tf.summary.histogram("weights", h1)
@@ -134,7 +133,6 @@ class LSTM_model:
         with tf.name_scope('multilayer_encoder'):
             # as the LSTM expects its input to be of shape `[batch_size, time, input_size]`.        
             layer_emb = tf.reshape(layer_emb, [batch_x_shape[0], -1, n_hidden_1])
-            # `layer_fc2` is now reshaped into `[n_steps, batch_size, n_hidden_2]`,
             cells_encoder = []
             with tf.variable_scope('encoder'):
                 for _ in range(n_layers):
@@ -155,8 +153,8 @@ class LSTM_model:
             if train and weight_summary:
                 tf.summary.histogram("activations", encoder_outputs)
 
-        batch_x_decode_shape = tf.shape(batch_x_decode)
-        batch_x_decode = tf.reshape(batch_x_decode, [-1, n_input_decode, n_input_decode, n_channels])  # (batch_size*time, n_input, n_input, n_channels)
+        batch_x_decode_shape = tf.shape(batch_x_decode) #[batch_size, n_time, n_input, n_input, n_channels]
+        batch_x_decode = tf.reshape(batch_x_decode, [-1, n_input_decode, n_input_decode, n_channels])  # (batch_size*n_time, n_input, n_input, n_channels)
 
         with tf.name_scope('embedding_decoder_convolution'):
             wc1 = variable_on_device('wc1', 
@@ -240,11 +238,10 @@ class LSTM_model:
             with tf.variable_scope('decoder'):
                 for _ in range(n_layers):
                     cell = tf.nn.rnn_cell.BasicLSTMCell(n_cell_dim, state_is_tuple = True)
-                    cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob = 1 - dropout[2])
+                    cell = tf.nn.rnn_cell.DropoutWrapper(cell, output_keep_prob = 1 - dropout[1])
                     cells.append(cell)
                 stack = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=True)
 
-                # self._initial_state = self.encoder_final_state
                 if train:
                     self._initial_state = self.encoder_final_state
                 else:
@@ -282,7 +279,6 @@ class LSTM_model:
                 tf.summary.histogram("activations", layer_out)
 
         with tf.name_scope('mixture_coef'):
-            self.end_layer, \
              self.pi_layer, \
               self.mu_layer, \
                self.L_layer = get_mixture_coef(layer_out, n_mixture, n_controled_var)
@@ -294,7 +290,7 @@ class LSTM_model:
             return
 
         with tf.name_scope('loss'):
-            self.total_loss, self.avg_loss = self.setup_loss(target, target_end, target_end_neg, n_mixture, n_controled_var)
+            self.total_loss, self.avg_loss = self.setup_loss(target, n_mixture, n_controled_var)
         # setup optimizer
         with tf.name_scope('training_optimizer'):
             train_ops = tf.train.MomentumOptimizer(learning_rate=self.learning_rate,
@@ -311,44 +307,35 @@ class LSTM_model:
             self.summary_op = tf.summary.merge_all()
         return
 
-    def setup_loss(self, target, target_end, target_end_neg, n_mixture, n_controled_var):
-        target_tile, target_end, target_end_neg = self.reshape_target(target, target_end, target_end_neg, n_mixture, n_controled_var)
-        self.p_end = tf.abs(tf.multiply(self.end_layer, target_end)) + tf.abs(tf.multiply(1. - self.end_layer, target_end_neg) )
-        # shape of [batch*time, 1]
+    def setup_loss(self, target, n_mixture, n_controled_var):
+        target_tile = self.reshape_target(target, n_mixture, n_controled_var)
 
         p_i = self.MVN_pdf.prob(target_tile) # shape of [batch * time, n_mixture]
         # loss = -(tf.log(1e-7 + tf.reduce_sum(tf.multiply(self.pi_layer, p_i), axis = 1)))
         self.MNV_loss =  - tf.log(1e-7 + tf.reduce_sum(tf.multiply(self.pi_layer, p_i), axis = 1, keepdims=True))
-        self.p_end_loss = - tf.log(1e-7 + self.p_end)
-        loss = self.MNV_loss * (1 - self.p_end_loss_weight) + self.p_end_loss * self.p_end_loss_weight
         # loss = -(tf.log(1e-7 + tf.reduce_sum(tf.multiply(self.pi_layer, p_i), axis = 1)) + 
         #          tf.log(1e-7 + self.p_end))
-        total_loss = tf.reduce_sum(loss)
-        avg_loss = tf.reduce_mean(loss)
+        total_loss = tf.reduce_sum(self.MNV_loss)
+        avg_loss = tf.reduce_mean(self.MNV_loss)
         return total_loss, avg_loss
     
-    def reshape_target(self, target, target_end, target_end_neg, n_mixture, n_controled_var):
+    def reshape_target(self, target, n_mixture, n_controled_var):
         # target has shape of [batch,time, n_controled_var]
         # target_tile has shape of [batch * time, n_mixture, n_controled_var]
         target_tile = tf.reshape(tf.tile(tf.reshape(target, 
                                                     (-1, n_controled_var)), 
                                          multiples=[1, n_mixture]), 
                                 (-1, n_mixture, n_controled_var))
-        target_end = tf.reshape(target_end, (-1, 1))
-        target_end_neg = tf.reshape(target_end_neg, (-1, 1))
-        return target_tile, target_end, target_end_neg
+        return target_tile
 
 def get_mixture_coef(layer_out, n_mixture, n_controled_var):
     n_cov_trig = sum(range(n_controled_var + 1))
-    split_shape = [1, n_mixture, n_mixture * n_controled_var, n_mixture * n_cov_trig]
-    end_layer, \
-     pi_layer, \
+    split_shape = [n_mixture, n_mixture * n_controled_var, n_mixture * n_cov_trig]
+    pi_layer, \
       mu_layer, \
        L_layer = tf.split(value = layer_out, 
                           num_or_size_splits = split_shape,
                           axis = 1)
-    
-    end_layer = tf.nn.sigmoid(end_layer)
     pi_layer = tf.nn.softmax(pi_layer)
 
     mu_layer = tf.reshape(mu_layer, (-1, n_mixture, n_controled_var)) # [batch*time, n_mixture, n_controled_var]
@@ -358,4 +345,4 @@ def get_mixture_coef(layer_out, n_mixture, n_controled_var):
     L_layer = tf.contrib.distributions.fill_triangular(L_layer)
     L_layer = tf.contrib.distributions.matrix_diag_transform(L_layer, transform=tf.nn.softplus)
     
-    return end_layer, pi_layer, mu_layer, L_layer
+    return pi_layer, mu_layer, L_layer
