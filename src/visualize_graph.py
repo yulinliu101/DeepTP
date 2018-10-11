@@ -2,7 +2,7 @@
 # @Author: Yulin Liu
 # @Date:   2018-10-10 14:23:23
 # @Last Modified by:   Yulin Liu
-# @Last Modified time: 2018-10-10 15:33:54
+# @Last Modified time: 2018-10-10 22:20:47
 
 import numpy as np
 import tensorflow as tf
@@ -10,7 +10,6 @@ import os
 from configparser import ConfigParser
 from rnn_encoder_decoder import LSTM_model
 import matplotlib.pyplot as plt
-
 
 class visual_graph:
     def __init__(self, 
@@ -60,24 +59,34 @@ class visual_graph:
                                 weight_summary = False)
         return
     
-    def restore_model(self):
-        self.graph = tf.Graph()
-        self.launchGraph()
-        self.sess = tf.Session()
-        self.saver = tf.train.Saver()
-        self.saver.restore(self.sess, restored_model_path)
-        self.weights = self.return_weights()
-        self.sess.close()
-        return
+    def feed_fwd_convlayer(self, feed_input):
+        with tf.device('/cpu:0'):
+            self.graph = tf.Graph()
+            self.launchGraph()
+            self.sess = tf.Session()
+            self.saver = tf.train.Saver()
+            self.saver.restore(self.sess, self.restored_model_path)
+            self.sess.graph.finalize()
+            self.weights = self._return_weights()
+            conv1_out, conv2_out, conv3_out = self._feed_fwd_convlayer(feed_input)
+            self.sess.close()
+        return conv1_out, conv2_out, conv3_out
     
-    def return_weights(self):
+    def _return_weights(self):
         weight_list = tf.trainable_variables()
         weights = {}
         for v in weight_list:
             weights[v.name] = self.sess.run(v)
         return weights
+    
+    def _feed_fwd_convlayer(self, feed_input):
+        # feed_input should have the shape of [?, ?, 20, 20, 4]
+        conv1_out = self.sess.run(self.MODEL.conv1, feed_dict={self.input_tensor: feed_input})
+        conv2_out = self.sess.run(self.MODEL.conv2, feed_dict={self.input_tensor: feed_input})
+        conv3_out = self.sess.run(self.MODEL.conv3, feed_dict={self.input_tensor: feed_input})
+        return conv1_out, conv2_out, conv3_out
 
-def visualize_weights(weight_var, fig_size = (16, 4)):
+def visualize_raw_weights(weight_var, fig_size = (8, 4)):
     n_layers = weight_var.shape[3]
     n_channels = weight_var.shape[2]
     fig, axs = plt.subplots(n_channels, n_layers, figsize=fig_size, facecolor='w', edgecolor='k')
@@ -90,6 +99,28 @@ def visualize_weights(weight_var, fig_size = (16, 4)):
                                    vmin = weight_var.min())
             axs[n_layers * i + j].set_axis_off()
     plt.show()
+    return fig
+
+def visualize_conv_layers(conv_layer, 
+                          nrow, 
+                          ncol, 
+                          fig_size):
+    print(conv_layer.shape)
+    # n_layers = weight_var.shape[3]
+    # n_channels = weight_var.shape[2]
+    fig, axs = plt.subplots(nrow, ncol, figsize=fig_size, facecolor='w', edgecolor='k')
+    fig.subplots_adjust(wspace = 0.01, hspace = 0.01)
+    axs = axs.ravel()
+    for i in range(nrow):
+        for j in range(ncol):
+            axs[ncol * i + j].imshow(conv_layer[j, :, :, i], 
+                                   cmap = 'bwr',
+                                   vmax = conv_layer[:, :, :, i].max(), 
+                                   vmin = conv_layer[:, :, :, i].min(),
+                                   origin = 'lower')
+            axs[ncol * i + j].set_axis_off()
+    plt.show()
+    return fig
 
 '''
 Example Code:
@@ -102,7 +133,7 @@ visual_graph_class = visual_graph(config_path, restored_model_path)
 visual_graph_class.restore_model()
 weights = visual_graph_class.weights
 
-visualize_weights(weight_var=weights['wc1:0'], fig_size = (8, 2))
-visualize_weights(weight_var=weights['wc2:0'], fig_size = (8,4))
-visualize_weights(weight_var=weights['wc3:0'], fig_size = (8,4))
+visualize_raw_weights(weight_var=weights['wc1:0'], fig_size = (8, 2))
+visualize_raw_weights(weight_var=weights['wc2:0'], fig_size = (8,4))
+visualize_raw_weights(weight_var=weights['wc3:0'], fig_size = (8,4))
 '''
