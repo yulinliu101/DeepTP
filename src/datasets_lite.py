@@ -358,6 +358,7 @@ class DatasetSample(flight_track_feature_generator):
         latlon_spd = self._calc_latlon_spd(flight_tracks)
         flight_tracks.loc[:, 'Lat_spd'] = latlon_spd[:, 0]
         flight_tracks.loc[:, 'Lon_spd'] = latlon_spd[:, 1]
+        flight_tracks = flight_tracks.groupby('FID').head(20).reset_index(drop = True)
 
         # multiple tracks must have the same length for now
         tracks = flight_tracks[['Lat', 'Lon', 'Alt', 'cumDT', 'Lat_spd', 'Lon_spd']].values.astype(np.float32)
