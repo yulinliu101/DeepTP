@@ -165,11 +165,7 @@ class trainRNN:
                 self.sess.run(tf.global_variables_initializer())
                 self.sess.graph.finalize()
                 logger.info("===============================================================")
-                # logger.info("Load data into a queue ...")
-                # self.sess.run(self.iterator.initializer, feed_dict={self.input_tensor: self.cpu_dataset.train_tracks,
-                #                                                     self.seq_length:self.cpu_dataset.train_seq_lens,
-                #                                                     self.target:self.cpu_dataset.train_tracks,
-                #                                                     self.BATCH_SIZE: self.batch_size})
+
                 self.total_samples = self.cpu_dataset.n_train_data_set
                 logger.info("Total training sample size is %d", self.total_samples)
                 logger.info("===============================================================")
@@ -215,27 +211,10 @@ class trainRNN:
                         self.known_flight_deptime = flight_tracks.groupby('FID')['FID', 'Elap_Time'].head(1).values
 
                         logger.info("=============== Start sampling ... ==============")
-                        # width = 10 # 30, 300, 0.1
-                        # keep_search = 10
                         search_power = 2
                         debug = True
                         weights = 0.8
                         with tf.device('/cpu:0'):
-                            # predicted_tracks, \
-                            #  final_top_k_idx_seq, \
-                            #   buffer_total_logprob, \
-                            #    mus, \
-                            #     covs = self.sample_seq(start_tracks = tracks_split, 
-                            #                            standard_mu = self.cpu_dataset.data_mean, 
-                            #                            standard_std = self.cpu_dataset.data_std, 
-                            #                            normalized_flight_plan = fp_tracks_split, 
-                            #                            flight_plan_length = fp_seq_length,
-                            #                            max_length = 150, 
-                            #                            beam_search = True,
-                            #                            width = width,
-                            #                            weights = weights,
-                            #                            keep_search = keep_search,
-                            #                            debug = debug)
 
                             predicted_tracks, \
                              predicted_tracks_cov, \
@@ -250,17 +229,27 @@ class trainRNN:
                                                                                 weights = weights,
                                                                                 debug = debug)
 
-                                                                       # max_length = 150, 
-                                                                       # beam_search = True,
-                                                                       # width = 15,
-                                                                       # keep_search = 100
-
                         predicted_tracks = self.dataset_sample.unnormalize_flight_tracks(predicted_tracks)
-                        # predicted_tracks_cov = predicted_tracks_cov * (self.dataset_sample.train_track_std[:3]**2)
-                        # mus = mus + np.array([self.cpu_dataset.dep_lat, self.cpu_dataset.dep_lon, 0, 0])
-                        # with open('../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100), 'wb') as wpkl:
-                        #     pickle.dump((predicted_tracks, final_top_k_idx_seq, buffer_total_logprob, mus, covs), wpkl)
-                        # print('Finished sampling. File dumped to ../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100))
+                        
+                        # from kalman_filter import RTS_smoother
+                        # Q_err = 1e-6
+                        # Q = np.zeros(shape = predicted_tracks_cov.shape)
+                        # Q[:, :, ] = np.eye(5)
+                        # Q[:, :, :2, :2] = Q[:, :, :2, :2] * Q_err * 1000
+                        # Q[:, :, 2, 2] = 1.
+                        # Q[:, :, 3:, 3:] = Q[:, :, 3:, 3:] * Q_err
+                        # delta_t = 120./time_scale_factor
+                        # A = np.array([[1., 0., 0., delta_t, 0], 
+                        #              [0., 1., 0., 0., delta_t],
+                        #              [0., 0., 1., 0., 0.],
+                        #              [0., 0., 0., 1., 0.],
+                        #              [0., 0., 0., 0., 1.]])
+
+                        # rts_states, rts_covs = RTS_smoother(batch_kf_state = predicted_tracks[:, 20:, [0,1,2,4,5]],
+                        #                                     batch_kf_cov = predicted_tracks_cov,
+                        #                                     batch_Q = Q,
+                        #                                     A = A)
+                        
                         sample_rslt_path = 'sample_results/lite_ctrl_samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100)
                         with open(sample_rslt_path, 'wb') as wpkl:
                             pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info), wpkl)
@@ -516,10 +505,6 @@ class trainRNN:
             else:
                 prev_track_point = np.repeat(self.dataset_sample.unnormalize_flight_tracks(final_tracks[:, -1, :]), self.n_mixture, axis = 0)
                 prev_track_cov = np.repeat(final_tracks_cov[:, -1, :, :], self.n_mixture, axis = 0)
-            # controlled_next_point = self.calculate_next_pnt_nonlinear_state(current_lons = prev_track_point[:, 1], 
-            #                                                 current_lats = prev_track_point[:, 0], 
-            #                                                 controlled_azi = prev_track_point[:, 5] * 180 / np.pi, 
-            #                                                 controlled_dist = prev_track_point[:, 4]*1852*(120))
 
             time_scale_factor = 600.
             prev_track_point[:, [4, 5]] = prev_track_point[:, [4, 5]] * time_scale_factor
@@ -771,136 +756,6 @@ class trainRNN:
                               az = controlled_azi, 
                               dist = controlled_dist)
         return lons, lats
-
-    # def calculate_next_pnt_kf(self,
-    #                           current_state, 
-    #                           current_cov,
-    #                           measure_state,
-    #                           measure_cov,
-    #                           delta_t,
-    #                           Q_err = 1e-6,
-    #                           Q_scale_factor = 10,
-    #                           validation_gate = 0.8,
-    #                           maneuver_thres = 0.3,
-    #                           Kalman = True):
-    #     # current_state has shape: [n_seq, n_state_var]
-    #     # current_cov has shape: [n_seq, n_state_var, n_state_var]
-    #     # measure_state has shape: [n_seq, n_state_var]
-    #     # measure_cov has shape: [n_seq, n_state_var, n_state_var]
-
-    #     if not Kalman:
-    #         return measure_state, measure_cov, np.zeros((measure_state.shape[0], 1))
-
-    #     n_seq, n_state_var = current_state.shape
-    #     I = np.zeros(shape = (n_seq, n_state_var, n_state_var))
-    #     I[:, ] = np.eye(n_state_var, n_state_var)
-
-    #     Q = I.copy()
-                
-    #     Q[:, :2, :2] = Q[:, :2, :2] * Q_err * 1000
-    #     Q[:, 2, 2] = 1.
-    #     Q[:, 3:, 3:] = Q[:, 3:, 3:] * Q_err
-
-    #     current_state = current_state.reshape(n_seq, n_state_var, 1)
-    #     measure_state = measure_state.reshape(n_seq, n_state_var, 1)
-
-    #     next_state_pred, next_cov_pred = self._process_model(current_state,
-    #                                                          current_cov,
-    #                                                          delta_t,
-    #                                                          Q)
-
-    #     next_state, next_cov, residual, S_inv, kf_gain, mahal_error_sq = self._update(next_state_pred,
-    #                                                                                   next_cov_pred,
-    #                                                                                   measure_state,
-    #                                                                                   measure_cov)
-    #     logprob_measure = np.zeros((n_seq, 1))
-    #     gate_idx = np.where(mahal_error_sq >= validation_gate)
-    #     maneuver_idx = np.where((mahal_error_sq < validation_gate) & 
-    #                             (mahal_error_sq >= maneuver_thres))
-    #     print(gate_idx)
-    #     print(maneuver_idx)
-    #     # initialize output_state and cov
-    #     output_state = next_state.reshape(n_seq, n_state_var).copy()
-    #     output_cov = next_cov.copy()
-        
-    #     if gate_idx[0].size == 0:
-    #         pass
-    #     else:
-    #         # return predicted points for validation gates
-    #         output_state[gate_idx[0], :] = next_state_pred[gate_idx[0], :, 0]
-    #         output_cov[gate_idx[0], :, :] = next_cov_pred[gate_idx[0], :, :]
-    #         logprob_measure[gate_idx[0]] = -9.
-        
-    #     if maneuver_idx[0].size == 0:
-    #         pass
-    #     else:
-    #         # rescale Q matrix for maneuver points
-    #         Q_scale = Q[maneuver_idx[0], :, :] * Q_scale_factor
-    #         next_man_state_pred, next_man_cov_pred = self._process_model(current_state[maneuver_idx[0]],
-    #                                                                      current_cov[maneuver_idx[0]],
-    #                                                                      delta_t,
-    #                                                                      Q_scale)
-    #         next_man_state, next_man_cov, _, _, _, _ = self._update(next_man_state_pred,
-    #                                                                 next_man_cov_pred,
-    #                                                                 measure_state[maneuver_idx[0]],
-    #                                                                 measure_cov[maneuver_idx[0]])
-    #         output_state[maneuver_idx[0], :] = next_man_state.reshape(-1, n_state_var)
-    #         output_cov[maneuver_idx[0], :, :] = next_man_cov
-        
-    #     return output_state, output_cov, logprob_measure
-        
-
-    # def _process_model(self, 
-    #                    current_state,
-    #                    current_cov,
-    #                    delta_t,
-    #                    Q):
-    #     A = np.array([[1., 0., 0., delta_t, 0], 
-    #                  [0., 1., 0., 0., delta_t],
-    #                  [0., 0., 1., 0., 0.],
-    #                  [0., 0., 0., 1., 0.],
-    #                  [0., 0., 0., 0., 1.]])
-    #     # B = np.array([[0., 0.5 * delta_t**2, 0.], 
-    #     #               [0., 0., 0.5 * delta_t**2], 
-    #     #               [delta_t, 0, 0], 
-    #     #               [0, delta_t, 0], 
-    #     #               [0, 0, delta_t]])
-    #     # u = np.zeros((n_seq, 3, 1))
-    #     # u[:, :, 0] = [alt_spd, lat_accr, lon_accr]
-
-    #     next_state_pred = A @ current_state
-    #     next_cov_pred = A @ current_cov @ (A.T) # shape of [n_seq, n_state_var, n_state_var]
-    #     next_cov_pred += Q
-    #     return next_state_pred, next_cov_pred
-
-    # def _update(self, 
-    #             next_state_pred,
-    #             next_cov_pred,
-    #             measure_state,
-    #             measure_cov,
-    #             ):
-        
-    #     H = np.zeros((next_cov_pred.shape[0], 2, next_cov_pred.shape[-1]))
-    #     H[:, :, :2] = np.eye(2)
-
-    #     S = H @ next_cov_pred @ np.transpose(H, axes = [0, 2, 1]) + measure_cov[:, :2, :2]
-
-    #     I = np.zeros(shape = S.shape)
-    #     I[:, ] = np.eye(S.shape[-1])
-    #     S_inv = np.linalg.solve(S, I)
-
-    #     residual = H @ (measure_state - next_state_pred) # shape of [n_seq, n_state_var, 1]
-
-    #     kf_gain = (next_cov_pred @ np.transpose(H, [0,2,1])) @ S_inv
-    #     next_state = next_state_pred  + kf_gain @ (residual)
-
-    #     next_cov = next_cov_pred - kf_gain @ H @ next_cov_pred
-    #     next_cov = (next_cov + np.transpose(next_cov, [0, 2, 1]))/2
-    #     # next_cov = (I - kf_gain) @ next_cov_pred @ np.transpose(I - kf_gain, axes = [0, 2, 1]) + kf_gain @ measure_cov @ np.transpose(kf_gain, [0, 2, 1])
-    #     # mahal_error_sq = np.transpose(residual[:, :2, ], axes = [0, 2, 1]) @ np.linalg.solve(next_cov_pred[:, :2, :2], I[:, :2, :2]) @ residual[:, :2, ]
-    #     # mahal_error_sq = np.abs(residual[:, 0, 0])/np.sqrt(next_cov_pred[:, 0, 0])+np.abs(residual[:, 1, 0])/np.sqrt(next_cov_pred[:, 1, 1])
-    #     mahal_error_sq = np.abs(residual[:, 0, 0])+np.abs(residual[:, 1, 0])
-    #     return next_state, next_cov, residual, S_inv, kf_gain, mahal_error_sq.flatten()
 
 # to run in console
 if __name__ == '__main__':
