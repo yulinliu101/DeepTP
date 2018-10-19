@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-10-16 13:52:03
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-10-16 16:24:24
+# @Last Modified time: 2018-10-18 21:05:45
 
 import numpy as np
 
@@ -50,8 +50,8 @@ def calculate_next_pnt_kf(current_state,
     gate_idx = np.where(mahal_error_sq >= validation_gate)
     maneuver_idx = np.where((mahal_error_sq < validation_gate) & 
                             (mahal_error_sq >= maneuver_thres))
-    print(gate_idx)
-    print(maneuver_idx)
+    # print(gate_idx)
+    # print(maneuver_idx)
     # initialize output_state and cov
     output_state = next_state.reshape(n_seq, n_state_var).copy()
     output_cov = next_cov.copy()

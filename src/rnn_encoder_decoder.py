@@ -121,7 +121,6 @@ class LSTM_model:
                                     [n_input, n_hidden_1],
                                     tf.random_normal_initializer(stddev=h1_stddev))
             layer_emb = tf.nn.elu(tf.nn.xw_plus_b(batch_x, h1, b1))
-            
             # layer_emb = tf.minimum(tf.nn.relu(tf.add(tf.matmul(batch_x, h1), b1)), relu_clip)
             # layer_emb = tf.nn.dropout(layer_emb, (1.0 - dropout[0]))
 
@@ -204,11 +203,11 @@ class LSTM_model:
             # print("pool 2 layer shape: ", pool2.get_shape())
             # pool2_shape = tf.shape(pool2)
             conv3_shape = tf.shape(self.conv3)
-            dense = tf.reshape(self.conv3, [-1, conv3_shape[1]*conv3_shape[2]*conv3_shape[3]])
-            print("dense shape (reshape from conv3): ", dense.get_shape())
-            fc1 = tf.nn.elu(tf.nn.xw_plus_b(dense, wcd, bcd))
-            print("fully connected layer shape: ", fc1.get_shape())
-            fc1_dropout = tf.nn.dropout(fc1, 1 - dropout[1])
+            self.dense = tf.reshape(self.conv3, [-1, conv3_shape[1]*conv3_shape[2]*conv3_shape[3]])
+            print("dense shape (reshape from conv3): ", self.dense.get_shape())
+            self.fc1 = tf.nn.elu(tf.nn.xw_plus_b(self.dense, wcd, bcd))
+            print("fully connected layer shape: ", self.fc1.get_shape())
+            fc1_dropout = tf.nn.dropout(self.fc1, 1 - dropout[1])
 
 
         batch_xcoords_decode_shape = tf.shape(batch_xcoords_decode)

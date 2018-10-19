@@ -11,7 +11,7 @@ from tensorflow.python.client import device_lib
 from sklearn.metrics import confusion_matrix
 import pickle
 import math
-
+from utils import g
 
 def get_available_gpus():
     """
@@ -210,7 +210,7 @@ class trainRNN:
                         # keep_search = 10
                         search_power = 2
                         debug = True
-                        weights = 0.75
+                        weights = 0.9
                         with tf.device('/cpu:0'):
                             # predicted_tracks, \
                             #  final_top_k_idx_seq, \
@@ -252,7 +252,7 @@ class trainRNN:
                         # with open('../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100), 'wb') as wpkl:
                         #     pickle.dump((predicted_tracks, final_top_k_idx_seq, buffer_total_logprob, mus, covs), wpkl)
                         # print('Finished sampling. File dumped to ../data/test/test_delta_w%d_k%d_w%d.pkl'%(width, keep_search, weights*100))
-                        sample_rslt_path = 'sample_results/samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100)
+                        sample_rslt_path = 'sample_results/ctrl_samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100)
                         with open(sample_rslt_path, 'wb') as wpkl:
                             pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info), wpkl)
                         print('Finished sampling. File dumped to %s'%(sample_rslt_path))
@@ -296,7 +296,7 @@ class trainRNN:
         return 
     
     def run_training_epoch(self, 
-                           lr_decay_inspection_period = 20):
+                           lr_decay_inspection_period = 30):
         train_start_time = time.time()
         train_epoch_losses = []
         lr_epoch = 0
@@ -317,13 +317,16 @@ class trainRNN:
                 train_epoch_losses.append(train_epoch_loss)
                 lr_epoch += 1
             else:
-                if (train_epoch_loss + train_epoch_losses[-1] + train_epoch_losses[-2])/3 >= np.max(train_epoch_losses):
+                if (train_epoch_loss + train_epoch_losses[-1])/2 >= np.percentile(train_epoch_losses, 75):
                     self.MODEL.learning_rate = self.MODEL.learning_rate * 0.5
                     logger.info('Learning rate decaying... Now is: {:.7f}'.format(self.MODEL.learning_rate))
                     lr_epoch = 0
                     train_epoch_losses = [train_epoch_loss]
                 train_epoch_losses.pop(0)
                 train_epoch_losses.append(train_epoch_loss)
+            if (epoch + 1) % 750 == 0:
+                self.MODEL.learning_rate = self.MODEL.learning_rate * 0.75
+
             
             # if (epoch+1) <= 1500:
             #     if (epoch+1) % 400 == 0:
@@ -410,6 +413,7 @@ class trainRNN:
         #############   data preprocessing  #############
         #################################################
         n_seq, n_time, _ = start_tracks.shape
+
         coords_logprob_tensor = self.MODEL.MVN_pdf.log_prob(self.MODEL.mu_layer)
         coords_cov_tensor = tf.matmul(self.MODEL.L_layer, self.MODEL.L_layer, transpose_b = True)
         
@@ -467,19 +471,44 @@ class trainRNN:
             coords_cov: np array with size (n_seq*n_mixture^i, n_mixture, n_input, n_input)
             coords_logprob: np array with size (n_seq*n_mixture^i, n_mixture)
             """
-
-            last_input_track_point = coords_mu.reshape(coords_mu.shape[0]*coords_mu.shape[1], 1, -1) # shape of [n_seq*n_mixture^(i+1), 1, n_input]
-            last_input_track_point_cov = coords_cov.reshape(-1, 1, coords_cov.shape[2], coords_cov.shape[3]) # shape of [n_seq*n_mixture^(i+1), n_input, n_input]
-            # flight_plan_length = np.repeat(flight_plan_length, self.n_mixture)
-            # normalized_flight_plan = TODO
+            last_input_track_point = coords_mu.reshape(coords_mu.shape[0]*coords_mu.shape[1], 1, -1) # shape of [n_seq*n_mixture^(i+1), 1, n_controled_var]
+            last_input_track_point_cov = coords_cov.reshape(-1, 1, coords_cov.shape[2], coords_cov.shape[3]) # shape of [n_seq*n_mixture^(i+1), n_input, n_controled_var]
             state = tuple([tf.nn.rnn_cell.LSTMStateTuple(c = np.repeat(tmp_state.c, self.n_mixture, axis = 0), 
                                                          h = np.repeat(tmp_state.h, self.n_mixture, axis = 0)) for tmp_state in state])
+
+
+            ##########################################################################################
+            ##########################       Controlled Prediction        ############################
+            ##########################################################################################
+
+            # unnormalize predicted flight tracks to limit the size of next predicted point
+            # with shape of [n_seq*n_mixture^(i+1), 1, n_controled_var]: [lat, lon, alt, time, spd, theta]
+            unnormalized_last_track_point = self.dataset_sample.unnormalize_flight_tracks(last_input_track_point.reshape(-1, self.n_controled_var))
+            if i == 0:
+                prev_track_point = np.repeat(self.dataset_sample.unnormalize_flight_tracks(start_tracks[:, -1, :]), self.n_mixture, axis = 0)
+            else:
+                prev_track_point = np.repeat(self.dataset_sample.unnormalize_flight_tracks(final_tracks[:, -1, :]), self.n_mixture, axis = 0)
+
+            controlled_next_point = self.calculate_next_pnt(current_lons = prev_track_point[:, 1], 
+                                                            current_lats = prev_track_point[:, 0], 
+                                                            controlled_azi = prev_track_point[:, 5] * 180 / np.pi, 
+                                                            controlled_dist = unnormalized_last_track_point[:, 4]*1852*(120))
+                                                            # controlled_dist = unnormalized_last_track_point[:, 4]*1852*(unnormalized_last_track_point[:, 3] - prev_track_point[:, 3]))
+            unnormalized_last_track_point[:, 0] = controlled_next_point[1]
+            unnormalized_last_track_point[:, 1] = controlled_next_point[0]
+            unnormalized_last_track_point[:, 3] = prev_track_point[:, 3] + 120
+            normalized_last_track_point = self.dataset_sample.normalize_flight_tracks(unnormalized_last_track_point)
+            last_input_track_point[:, :, 0] = (normalized_last_track_point[:, 0, None]+last_input_track_point[:, :, 0])/2
+            last_input_track_point[:, :, 1] = (normalized_last_track_point[:, 1, None]+last_input_track_point[:, :, 1])/2
+            last_input_track_point[:, :, 3] = normalized_last_track_point[:, 3, None]
+
+            ##########################################################################################
+            #########################      End of Controlled Prediction        #######################
+            ##########################################################################################
+            
             if i == 0:
                 buffer_total_logprob = (pi_logprob*weights + coords_logprob*(1-weights)) # has the shape of [n_seq, n_mixture]
                 buffer_pi_prob = pi_logprob.copy()
-                # prob_end = p_end.copy()
-                # print(buffer_pi_prob)
-                # print(last_input_track_point)
                 final_tracks = np.concatenate((np.repeat(start_tracks, self.n_mixture, axis = 0), last_input_track_point), axis = 1)
                 # has the shape of [n_seq*n_mixture, n_time+1, 4]
                 final_tracks_cov = last_input_track_point_cov.copy()
@@ -554,12 +583,11 @@ class trainRNN:
             #     prob_end = np.concatenate((prob_end, p_end), axis = 1)
 
             tmp_buffer_total_logprob = (pi_logprob*weights + coords_logprob*(1-weights))
-            # buffer_total_logprob = buffer_total_logprob + tmp_buffer_total_logprob # has shape of [n_seq*n_mixture^(i+1), n_mixture]
+            buffer_total_logprob = buffer_total_logprob + tmp_buffer_total_logprob # has shape of [n_seq*n_mixture^(i+1), n_mixture]
             # buffer_pi_prob += np.exp(pi_logprob)*(0.5**(j+search_power))
             tmp_pi_prob = pi_logprob  + (j + search_power) * np.log(0.95)
             buffer_pi_prob_all_mix.append(tmp_pi_prob)
             # buffer_pi_prob = buffer_pi_prob + pi_logprob  + (j + search_power) * np.log(0.95)
-
 
             # e.g., n_mixture = 10, search_power == 4, total 10000 trajs, then has the prob of buffer_total_logprob
             # 000| 0,1,2,...,9
@@ -571,16 +599,42 @@ class trainRNN:
             # ...
             # 999| 0,1,2,...,9
             
-            # top_k_idx = np.argsort(buffer_total_logprob, axis = -1)[:, -1] # shape of (n_seq*n_mixture^(i+1), )
-            top_k_idx = np.argsort(tmp_buffer_total_logprob, axis = -1)[:, -1] # shape of (n_seq*n_mixture^(i+1), )
+            top_k_idx = np.argsort(buffer_total_logprob, axis = -1)[:, -1] # shape of (n_seq*n_mixture^(i+1), )
+            # top_k_idx = np.argsort(tmp_buffer_total_logprob, axis = -1)[:, -1] # shape of (n_seq*n_mixture^(i+1), )
 
-            buffer_total_logprob = buffer_total_logprob + tmp_buffer_total_logprob[range(coords_mu.shape[0]), top_k_idx, None]
+            # buffer_total_logprob = buffer_total_logprob + tmp_buffer_total_logprob[range(coords_mu.shape[0]), top_k_idx, None]
+            buffer_total_logprob = buffer_total_logprob[range(coords_mu.shape[0]), top_k_idx, None]
             buffer_pi_prob = np.concatenate((buffer_pi_prob, tmp_pi_prob[range(coords_mu.shape[0]), top_k_idx, None]), axis = 1)
             # buffer_pi_prob = buffer_pi_prob[range(coords_mu.shape[0]), top_k_idx, None]
 
             last_input_track_point = coords_mu[range(coords_mu.shape[0]), top_k_idx, None] # shape of [n_seq*n_mixture^(i+1), 1, n_controled_var]
             last_input_track_point_cov = coords_cov[range(coords_cov.shape[0]), top_k_idx, :, :].reshape(-1, 1, coords_cov.shape[2], coords_cov.shape[3]) 
             # shape of [n_seq*n_mixture^(i+1), 1, 4, 4]
+
+            ##########################################################################################
+            ##########################       Controlled Prediction        ############################
+            ##########################################################################################
+
+            # unnormalize predicted flight tracks to limit the size of next predicted point
+            # with shape of [n_seq*n_mixture^(i+1), 1, n_controled_var]: [lat, lon, alt, time, spd, theta]
+            unnormalized_last_track_point = self.dataset_sample.unnormalize_flight_tracks(last_input_track_point.reshape(-1, self.n_controled_var))
+            prev_track_point = self.dataset_sample.unnormalize_flight_tracks(final_tracks[:, -1, :])
+            controlled_next_point = self.calculate_next_pnt(current_lons = prev_track_point[:, 1], 
+                                                            current_lats = prev_track_point[:, 0], 
+                                                            controlled_azi = prev_track_point[:, 5] * 180 / np.pi, 
+                                                            controlled_dist = unnormalized_last_track_point[:, 4]*1852*(120))
+                                                            # controlled_dist = unnormalized_last_track_point[:, 4]*1852*(unnormalized_last_track_point[:, 3] - prev_track_point[:, 3]))
+            unnormalized_last_track_point[:, 0] = controlled_next_point[1]
+            unnormalized_last_track_point[:, 1] = controlled_next_point[0]
+            unnormalized_last_track_point[:, 3] = prev_track_point[:, 3] + 120
+            normalized_last_track_point = self.dataset_sample.normalize_flight_tracks(unnormalized_last_track_point)
+            last_input_track_point[:, :, 0] = (normalized_last_track_point[:, 0, None]+last_input_track_point[:, :, 0])/2
+            last_input_track_point[:, :, 1] = (normalized_last_track_point[:, 1, None]+last_input_track_point[:, :, 1])/2
+            last_input_track_point[:, :, 3] = normalized_last_track_point[:, 3, None]
+
+            ##########################################################################################
+            #########################      End of Controlled Prediction        #######################
+            ##########################################################################################
 
             final_tracks = np.concatenate((final_tracks, last_input_track_point), axis = 1) 
             # has the shape of [n_seq*n_mixture^(i+1), ?, 4]
@@ -600,7 +654,7 @@ class trainRNN:
         if debug:
             with open('debug_file/samp_mu_cov_outer_loop_debug.pkl', 'wb') as f:
                 pickle.dump((state, buffer_pi_prob_all_mix, prob_end, coords_logprob, final_tracks, pred_feature_cubes, pred_feature_grid, predicted_matched_info), f)
-        return final_tracks[:, :, :], final_tracks_cov, buffer_total_logprob, buffer_pi_prob, prob_end
+        return final_tracks[:, :, :], final_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info
 
 
     def arrange_top_k(self, 
@@ -619,6 +673,17 @@ class trainRNN:
             i += 1
         final_seq = np.array(final_seq)
         return final_seq
+
+    def calculate_next_pnt(self, 
+                           current_lons, 
+                           current_lats, 
+                           controlled_azi, 
+                           controlled_dist):
+        lons, lats, _ = g.fwd(lons = current_lons, 
+                              lats = current_lats, 
+                              az = controlled_azi, 
+                              dist = controlled_dist)
+        return lons, lats
 
 
 

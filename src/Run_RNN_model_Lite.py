@@ -64,15 +64,11 @@ class trainRNN:
                      fp_mean = self.cpu_dataset.FP_mean, 
                      fp_std = self.cpu_dataset.FP_std, 
                      feature_mean = self.cpu_dataset.feature_cubes_mean, 
-                     feature_std = self.cpu_dataset.feature_cubes_std)
+                     feature_std = self.cpu_dataset.feature_cubes_std,
+                     train_tracks_time_id_info = self.cpu_dataset.train_tracks_time_id_info,
+                     dev_tracks_time_id_info = self.cpu_dataset.dev_tracks_time_id_info)
         else:
             self.std_arr_loader = np.load('../../DATA/DeepTP/standardize_arr_lite.npz')
-            self.std_arr_loader['track_mean']
-            self.std_arr_loader['track_std']
-            self.std_arr_loader['fp_mean']
-            self.std_arr_loader['fp_std']
-            self.std_arr_loader['feature_mean']
-            self.std_arr_loader['feature_std']
 
     def load_configs(self):
         parser = ConfigParser(os.environ)
@@ -95,7 +91,10 @@ class trainRNN:
         self.state_size = parser.getint('lstm', 'n_cell_dim')
         self.n_layer = parser.getint('lstm', 'n_lstm_layers')
         # Number of contextual samples to include
-        self.batch_size = parser.getint(config_header, 'batch_size')
+        if not self.sample_traj:
+            self.batch_size = parser.getint(config_header, 'batch_size')
+        else:
+            self.batch_size = parser.getint(config_header, 'sample_batch_size')
         logger.debug('self.batch_size = %d', self.batch_size)
         self.model_dir = parser.get(config_header, 'model_dir')
         self.data_dir = parser.get(config_header, 'data_dir')
@@ -193,8 +192,8 @@ class trainRNN:
                                                             feature_cubes_mean =self.std_arr_loader['feature_mean'],
                                                             feature_cubes_std = self.std_arr_loader['feature_std'],
                                                             ncwf_data_rootdir = '../../DATA/NCWF/gridded_storm_hourly/',
-                                                            test_track_dir = '../../DATA/DeepTP/test_flight_tracks.csv',
-                                                            test_fp_dir = '../../DATA/DeepTP/test_flight_plans.csv',
+                                                            test_track_dir = '../../DATA/DeepTP/test_flight_tracks_all.csv',
+                                                            test_fp_dir = '../../DATA/DeepTP/test_flight_plans_all.csv',
                                                             flight_plan_util_dir = '../../DATA/DeepTP/test_flight_plans_util.CSV',
                                                             wind_data_rootdir = '../../DATA/filtered_weather_data/namanl_small_npz/',
                                                             grbs_common_info_dir = '/media/storage/DATA/filtered_weather_data/grbs_common_info.npz',
@@ -203,56 +202,67 @@ class trainRNN:
                                                             ncwf_arr_dir = '../../DATA/NCWF/gridded_storm.npz',
                                                             ncwf_alt_dict_dir = '../../DATA/NCWF/alt_dict.pkl')
                         fp_tracks_split, tracks_split, fp_seq_length, seq_length, flight_tracks = self.dataset_sample.process_test_tracks()
+                        import pandas as pd
+                        flight_tracks_fid = pd.unique(flight_tracks['FID'])
+                        n_sample_batches = tracks_split.shape[0]//self.batch_size + 1
+                        time_scale_factor = 600.
+                        for i in range(n_sample_batches):
+                            print('sampling batch %d'%i)
+                            st_idx = i * self.batch_size
+                            et_idx = min((i+1) * self.batch_size, fp_tracks_split.shape[0])
 
-                        start_tracks_feature_cubes, start_tracks_feature_grid, _ = self.dataset_sample.generate_test_track_feature_cubes(flight_tracks)
-                        start_tracks_feature_cubes = self.dataset_sample.reshape_feature_cubes(start_tracks_feature_cubes,
-                                                                                               track_length = seq_length)
+                            batch_flight_tracks = flight_tracks.loc[flight_tracks.FID.isin(flight_tracks_fid[st_idx:et_idx])].reset_index(drop = True)
+                            start_tracks_feature_cubes, \
+                                start_tracks_feature_grid, _ = self.dataset_sample.generate_test_track_feature_cubes(batch_flight_tracks)
 
-                        self.known_flight_deptime = flight_tracks.groupby('FID')['FID', 'Elap_Time'].head(1).values
+                            start_tracks_feature_cubes = self.dataset_sample.reshape_feature_cubes(start_tracks_feature_cubes,
+                                                                                                   track_length = seq_length[st_idx:et_idx])
 
-                        logger.info("=============== Start sampling ... ==============")
-                        search_power = 2
-                        debug = True
-                        weights = 0.8
-                        with tf.device('/cpu:0'):
+                            self.known_flight_deptime = batch_flight_tracks.groupby('FID')['FID', 'Elap_Time'].head(1).values
 
-                            predicted_tracks, \
-                             predicted_tracks_cov, \
-                              buffer_total_logprob, \
-                               buffer_pi_prob, \
-                                predicted_matched_info = self.sample_seq_mu_cov(start_tracks = tracks_split, 
-                                                                                start_tracks_feature_cubes = start_tracks_feature_cubes,
-                                                                                normalized_flight_plan = fp_tracks_split, 
-                                                                                flight_plan_length = fp_seq_length,
-                                                                                max_length = 70, 
-                                                                                search_power = search_power,
-                                                                                weights = weights,
-                                                                                debug = debug)
+                            logger.info("=============== Start sampling ... ==============")
+                            search_power = 2
+                            debug = False
+                            weights = 0.8
+                            with tf.device('/cpu:0'):
 
-                        predicted_tracks = self.dataset_sample.unnormalize_flight_tracks(predicted_tracks)
-                        
-                        # from kalman_filter import RTS_smoother
-                        # Q_err = 1e-6
-                        # Q = np.zeros(shape = predicted_tracks_cov.shape)
-                        # Q[:, :, ] = np.eye(5)
-                        # Q[:, :, :2, :2] = Q[:, :, :2, :2] * Q_err * 1000
-                        # Q[:, :, 2, 2] = 1.
-                        # Q[:, :, 3:, 3:] = Q[:, :, 3:, 3:] * Q_err
-                        # delta_t = 120./time_scale_factor
-                        # A = np.array([[1., 0., 0., delta_t, 0], 
-                        #              [0., 1., 0., 0., delta_t],
-                        #              [0., 0., 1., 0., 0.],
-                        #              [0., 0., 0., 1., 0.],
-                        #              [0., 0., 0., 0., 1.]])
+                                predicted_tracks, \
+                                 predicted_tracks_cov, \
+                                  buffer_total_logprob, \
+                                   buffer_pi_prob, \
+                                    predicted_matched_info = self.sample_seq_mu_cov(start_tracks = tracks_split[st_idx:et_idx], 
+                                                                                    start_tracks_feature_cubes = start_tracks_feature_cubes,
+                                                                                    normalized_flight_plan = fp_tracks_split[st_idx:et_idx], 
+                                                                                    flight_plan_length = fp_seq_length[st_idx:et_idx],
+                                                                                    max_length = 70, 
+                                                                                    search_power = search_power,
+                                                                                    weights = weights,
+                                                                                    debug = debug)
 
-                        # rts_states, rts_covs = RTS_smoother(batch_kf_state = predicted_tracks[:, 20:, [0,1,2,4,5]],
-                        #                                     batch_kf_cov = predicted_tracks_cov,
-                        #                                     batch_Q = Q,
-                        #                                     A = A)
-                        
-                        sample_rslt_path = 'sample_results/lite_ctrl_samp_mu_cov_test_delta_s%d_w%d.pkl'%(search_power, weights*100)
-                        with open(sample_rslt_path, 'wb') as wpkl:
-                            pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info), wpkl)
+                            predicted_tracks = self.dataset_sample.unnormalize_flight_tracks(predicted_tracks)
+                            
+                            
+                            Q_err = 1e-6
+                            Q = np.zeros(shape = predicted_tracks_cov.shape)
+                            Q[:, :, ] = np.eye(5)
+                            Q[:, :, :2, :2] = Q[:, :, :2, :2] * Q_err * 1000
+                            Q[:, :, 2, 2] = 1.
+                            Q[:, :, 3:, 3:] = Q[:, :, 3:, 3:] * Q_err
+                            delta_t = 120./time_scale_factor
+                            A = np.array([[1., 0., 0., delta_t, 0], 
+                                         [0., 1., 0., 0., delta_t],
+                                         [0., 0., 1., 0., 0.],
+                                         [0., 0., 0., 1., 0.],
+                                         [0., 0., 0., 0., 1.]])
+
+                            rts_states, rts_covs = RTS_smoother(batch_kf_state = predicted_tracks[:, 20:, [0,1,2,4,5]],
+                                                                batch_kf_cov = predicted_tracks_cov,
+                                                                batch_Q = Q,
+                                                                A = A)
+                            
+                            sample_rslt_path = 'sample_results/all_lite_samp_mu_cov_test_s%d_w%d_batch%d.pkl'%(search_power, weights*100, i)
+                            with open(sample_rslt_path, 'wb') as wpkl:
+                                pickle.dump((predicted_tracks, predicted_tracks_cov, buffer_total_logprob, buffer_pi_prob, predicted_matched_info), wpkl)
                         print('Finished sampling. File dumped to %s'%(sample_rslt_path))
                     else:
                         pass
