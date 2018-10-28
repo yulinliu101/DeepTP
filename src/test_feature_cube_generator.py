@@ -89,7 +89,7 @@ ncwf_wx = pickle.load(open('../../DATA/NCWF/processed_bundle/storm_bundle_merge.
 ## weather should be good
 idx = 51134
 print(feature_grid[idx].shape)
-tmp_dt = processed_flight_tracks.loc[idx, 'wx_fname']
+tmp_dt = processed_flight_tracks.loc[idx, 'Elap_Time']
 print(str(tmp_dt))
 tmp_wx_idx = ncwf_wx[2].index([tmp_dt.year, tmp_dt.month, tmp_dt.day, tmp_dt.hour])
 plt.imshow(feature_cubes[idx][:, :, 0], origin='lower')
