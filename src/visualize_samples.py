@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-10-16 16:36:20
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-10-16 16:43:30
+# @Last Modified time: 2018-10-29 11:15:59
 
 from matplotlib.patches import Polygon
 import pyproj
@@ -105,9 +105,9 @@ def get_cov_ellipse_wh(cov, nstd = 3):
     return width, height, theta
 
 def plot_fp_act(FP_ID, 
-                IAH_BOS_FP_utilize, 
-                IAH_BOS_ACT_track, 
-                IAH_BOS_FP_track, 
+                FP_utilize_df, 
+                act_track_data, 
+                flight_plan_data, 
                 feed_track = None, 
                 pred_track = None, 
                 pred_track_mu = None,
@@ -134,18 +134,18 @@ def plot_fp_act(FP_ID,
     plt.plot(x1,y1, 'r*', ms = 15, zorder = 3)
     plt.plot(x2,y2, 'r*', ms = 15, zorder = 3)
 
-    fid_fp1 = IAH_BOS_FP_utilize.loc[IAH_BOS_FP_utilize.FLT_PLAN_ID == FP_ID, 'FID'].values
+    fid_fp1 = FP_utilize_df.loc[FP_utilize_df.FLT_PLAN_ID == FP_ID, 'FID'].values
     print('%d flights filed flight plan %s'%(fid_fp1.shape[0], FP_ID))
-    plot_track = IAH_BOS_ACT_track.loc[IAH_BOS_ACT_track.FID.isin(fid_fp1)]
-    plot_fp = IAH_BOS_FP_track.loc[IAH_BOS_FP_track.FLT_PLAN_ID_REAL == FP_ID]
+    plot_track = act_track_data.loc[act_track_data.FID.isin(fid_fp1)]
+    plot_fp = flight_plan_data.loc[flight_plan_data.FLT_PLAN_ID_REAL == FP_ID]
     x_fp, y_fp = m(plot_fp.LONGITUDE.values, plot_fp.LATITUDE.values)
     
     feed_x, feed_y = m(feed_track.Lon.values, feed_track.Lat.values)
-    feed, = plt.plot(feed_x, feed_y, 'o-', ms = 4, linewidth = 3, color='g', label = 'feed tracks', zorder = 4)
+    feed, = plt.plot(feed_x, feed_y, 'o-', ms = 4, linewidth = 3, color='g', label = 'Feed tracks', zorder = 6)
     
     for gpidx, gp in plot_track.groupby('FID'):
         x,y = m(gp.Lon.values, gp.Lat.values)
-        actual, = plt.plot(x,y,'--', linewidth = 2, color='b', label = 'Actual Tracks', zorder = 3)
+        actual, = plt.plot(x,y,'--', linewidth = 2, color='b', label = 'Actual Tracks', zorder = 5)
     fp, = plt.plot(x_fp, y_fp, '-', linewidth = 2, color='r', label = 'Flight Plans', zorder = 1)
     
     if pred_track is not None:
@@ -160,7 +160,7 @@ def plot_fp_act(FP_ID,
                      pred_track_mu[k][pred_track_mu[k][:,3].argsort()][:, 0])
         else:
             x, y = m(pred_track_mu[k][:, 1], pred_track_mu[k][:, 0])
-        plt.plot(x,y, 'mo--', ms = 4, zorder = 4)
+        plt.plot(x,y, 'mo--', ms = 4, zorder = 4, label = 'Predicted tracks')
 
     if pred_track_cov is not None:
         for t in range(pred_track_mu[k].shape[0]):
@@ -176,5 +176,6 @@ def plot_fp_act(FP_ID,
                              50, 
                              facecolor='green', zorder=4, alpha=0.25)
 
+    plt.legend(fontsize = 12, loc = 2)
     plt.show()
     return plot_track, plot_fp
