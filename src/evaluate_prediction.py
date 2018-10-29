@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-10-22 14:31:13
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-10-29 10:59:27
+# @Last Modified time: 2018-10-29 11:24:54
 
 import numpy as np
 import pandas as pd
@@ -147,13 +147,19 @@ class evaluate_prediction:
         return np.array(avg_horizontal_err), np.array(avg_vertical_err), np.array(all_horizontal_err), np.array(all_vertical_err)
 
     def plot_hist(self):
-        fig, axs = plt.subplots(2, 2, figsize=(8,8), facecolor='w', edgecolor='k')
+        fig, axs = plt.subplots(2, 2, figsize=(10,6), facecolor='w', edgecolor='k')
+        fig.subplots_adjust(wspace = 0.2, hspace = 0.35)
         axs = axs.ravel()
         _ = axs[0].hist(all_hor_err, 50, range = (0, 200), density = True)
         _ = axs[0].set_title('Horizontal Error (All)')
-        _ = axs[1].hist(avg_horizontal_err, 50, range = (0, 150), density = True)
+        _ = axs[0].set_xlabel('Distance/ nmi')
+        _ = axs[1].hist(avg_horizontal_err, 50, range = (0, 200), density = True)
         _ = axs[1].set_title('Horizontal Error (Flight)')
+        _ = axs[1].set_xlabel('Distance/ nmi')
         _ = axs[2].hist(all_alt_err, 25, range = (-150, 150), density = True)
         _ = axs[2].set_title('Vertical Error (All)')
+        _ = axs[2].set_xlabel('Distance/ FL')
         _ = axs[3].hist(avg_vertical_err, 25, range = (0, 150), density = True)
         _ = axs[3].set_title('Vertical Error (Flight)')
+        _ = axs[3].set_xlabel('Distance/ FL')
+        return
