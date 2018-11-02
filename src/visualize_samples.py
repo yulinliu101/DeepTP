@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-10-16 16:36:20
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-10-29 11:15:59
+# @Last Modified time: 2018-11-02 16:51:18
 
 from matplotlib.patches import Polygon
 import pyproj
@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
 import pickle
 from utils import g
+import os
 # Borrow from https://stackoverflow.com/questions/8161144/drawing-ellipses-on-matplotlib-basemap-projections
 class Basemap(Basemap):
     def ellipse(self, x0, y0, a, b, n, ax=None, **kwargs):
@@ -114,7 +115,9 @@ def plot_fp_act(FP_ID,
                 pred_track_cov = None,
                 k = 9, 
                 nstd = 3,
-                sort = True):
+                sort = True,
+                plot_weather_info = False,
+                **kwargs):
     # TODO: plot error ellipse
     ori_lat = 29.98333333; ori_lon = -95.33333333
     des_lat = 42.36666667; des_lon = -71
@@ -131,8 +134,8 @@ def plot_fp_act(FP_ID,
     
     x1, y1 = m(ori_lon, ori_lat)
     x2, y2 = m(des_lon, des_lat)
-    plt.plot(x1,y1, 'r*', ms = 15, zorder = 3)
-    plt.plot(x2,y2, 'r*', ms = 15, zorder = 3)
+    plt.plot(x1,y1, 'r*', ms = 15, zorder = 10)
+    plt.plot(x2,y2, 'r*', ms = 15, zorder = 10)
 
     fid_fp1 = FP_utilize_df.loc[FP_utilize_df.FLT_PLAN_ID == FP_ID, 'FID'].values
     print('%d flights filed flight plan %s'%(fid_fp1.shape[0], FP_ID))
@@ -141,26 +144,26 @@ def plot_fp_act(FP_ID,
     x_fp, y_fp = m(plot_fp.LONGITUDE.values, plot_fp.LATITUDE.values)
     
     feed_x, feed_y = m(feed_track.Lon.values, feed_track.Lat.values)
-    feed, = plt.plot(feed_x, feed_y, 'o-', ms = 4, linewidth = 3, color='g', label = 'Feed tracks', zorder = 6)
+    feed, = plt.plot(feed_x, feed_y, 'o-', ms = 4, linewidth = 3, color='g', label = 'Feed tracks', zorder = 9)
     
     for gpidx, gp in plot_track.groupby('FID'):
         x,y = m(gp.Lon.values, gp.Lat.values)
-        actual, = plt.plot(x,y,'--', linewidth = 2, color='b', label = 'Actual Tracks', zorder = 5)
-    fp, = plt.plot(x_fp, y_fp, '-', linewidth = 2, color='r', label = 'Flight Plans', zorder = 1)
+        actual, = plt.plot(x,y,'--', linewidth = 2, color='b', label = 'Actual Tracks', zorder = 8)
+    fp, = plt.plot(x_fp, y_fp, '-', linewidth = 2, color='r', label = 'Flight Plans', zorder = 5)
     
     if pred_track is not None:
         if sort:
             x, y = m(pred_track[k][pred_track[k][:,3].argsort()][:, 1], pred_track[k][pred_track[k][:,3].argsort()][:, 0])
         else:
             x, y = m(pred_track[k, :, 1], pred_track[k, :, 0])
-        pred_fig, = plt.plot(x,y, 'o--', ms = 3, zorder = 4)
+        pred_fig, = plt.plot(x,y, 'o--', ms = 3, zorder = 7)
     if pred_track_mu is not None:
         if sort:
             x, y = m(pred_track_mu[k][pred_track_mu[k][:,3].argsort()][:, 1], 
                      pred_track_mu[k][pred_track_mu[k][:,3].argsort()][:, 0])
         else:
             x, y = m(pred_track_mu[k][:, 1], pred_track_mu[k][:, 0])
-        plt.plot(x,y, 'mo--', ms = 4, zorder = 4, label = 'Predicted tracks')
+        plt.plot(x,y, 'mo--', ms = 4, zorder = 7, label = 'Predicted tracks')
 
     if pred_track_cov is not None:
         for t in range(pred_track_mu[k].shape[0]):
@@ -174,8 +177,90 @@ def plot_fp_act(FP_ID,
                              lon_a,
                              lat_b, 
                              50, 
-                             facecolor='green', zorder=4, alpha=0.25)
+                             facecolor='green', zorder=6, alpha=0.25)
 
     plt.legend(fontsize = 12, loc = 2)
+
+    if plot_weather_info:
+        grbs_common_info_file = kwargs.get('grbs_common_info_file', '/media/storage/DATA/filtered_weather_data/grbs_common_info.npz')
+        wind_file_root = kwargs.get('wind_file_root', '../../DATA/filtered_weather_data/namanl_small_npz/')
+        wx_file_root = kwargs.get('wx_file_root', '../../DATA/NCWF/gridded_storm_hourly/')
+        resolution = kwargs.get('resolution', 50)
+        wind_scale = kwargs.get('wind_scale', 1000)
+
+        wind_fname_list = [os.path.join(wind_file_root, wf) for wf in np.unique(plot_track['wind_fname'])]
+        wx_file_time = plot_track['wx_fname'].values
+        wx_file_time = np.unique(wx_file_time[~pd.isnull(wx_file_time)])
+
+        wx_fname_list = [os.path.join(wx_file_root, wf.replace('-', '_').replace(' ', '_').replace(':', '')[:15] + 'Z.npz') for wf in wx_file_time]
+        _ = plot_wx(m, 
+                    wind_fname_list = wind_fname_list, 
+                    wx_fname_list = wx_fname_list, 
+                    grbs_common_info_file = grbs_common_info_file,
+                    resolution = resolution, 
+                    wind_scale = wind_scale)
     plt.show()
-    return plot_track, plot_fp
+    return plot_track, m
+
+def plot_wx(m, 
+            wind_fname_list, 
+            wx_fname_list, 
+            grbs_common_info_file = '/media/storage/DATA/filtered_weather_data/grbs_common_info.npz',
+            resolution = 50, 
+            wind_scale = 1000, 
+            **kwargs):
+    from scipy.interpolate import griddata
+
+    grbs_common_info = np.load(grbs_common_info_file)
+    smallgrid = grbs_common_info['smallgrid']
+
+    i = 0
+    for wind_file in wind_fname_list:
+        wind_npz = np.load(wind_file)
+        if i == 0:
+            tmp_uwind = wind_npz['uwind']
+            tmp_vwind = wind_npz['vwind']
+            tmp_tempr = wind_npz['tempr']
+        else:
+            tmp_uwind += wind_npz['uwind']
+            tmp_vwind += wind_npz['vwind']
+            tmp_tempr += wind_npz['tempr']
+        i += 1
+
+    tmp_uwind /= i
+    tmp_vwind /= i
+    tmp_tempr /= i
+
+    if len(wx_fname_list) == 0:
+        pass
+    else:
+        wx_data = np.empty(shape = (0, smallgrid.shape[0]))
+        for wx_file in wx_fname_list:
+            wx_npz = np.load(wx_file)
+            wx_data = np.concatenate((wx_data, wx_npz['ncwf_arr']), axis = 0)
+        wx_grid = smallgrid[np.any(wx_data, axis = 0)]
+        # fig = plt.figure(figsize=(8,6))
+
+        x_grid, y_grid = m(wx_grid[:, 0], wx_grid[:, 1])
+        plt.scatter(x_grid, y_grid, zorder = 5, c = 'r', s = 0.5, label = 'convective weather')
+
+    # wind m/s
+    t = tmp_tempr[0]
+    u = tmp_uwind[0]
+    v = tmp_vwind[0]
+    # z = np.sqrt(u**2 + v**2)
+    x = smallgrid[:, 0]
+    y = smallgrid[:, 1]
+
+    xi = np.linspace(min(x), max(x), resolution)
+    yi = np.linspace(min(y), max(y), resolution)
+    ui = griddata((x, y), u, (xi[None,:], yi[:,None]), method='linear')
+    vi = griddata((x, y), v, (xi[None,:], yi[:,None]), method='linear')
+    ti = griddata((x, y), t, (xi[None,:], yi[:,None]), method='linear')
+
+    xi,yi = m(xi,yi)
+    Q = plt.quiver(xi,yi,ui,vi, scale = wind_scale, zorder = 4, label = 'wind speed')
+    qk = plt.quiverkey(Q, 0, 0, 100, '100 m/s', labelpos='W', color = 'r', labelcolor='k')
+    plt.pcolormesh(xi, yi, ti, zorder = 3, alpha = 0.35, cmap = 'bwr', label = 'temperature')
+
+    return 

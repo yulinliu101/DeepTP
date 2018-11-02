@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-08-31 10:35:27
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-09-06 18:11:21
+# @Last Modified time: 2018-10-28 16:58:58
 
 from utils_features import flight_track_feature_generator
 from utils import plot_fp_act, rotate_coord, plot_feature_grid
@@ -33,6 +33,7 @@ print('Downsamping checked!')
 # azimuth
 processed_flight_tracks = test_ffclass.flight_track_preprocess(test_ffclass.downsamp_flight_tracks)
 assert np.less_equal(processed_flight_tracks.groupby('FID').head(1).azimuth.unique(), np.array([1e6]))
+print(processed_flight_tracks.columns)
 print('Azimuth checked!')
 
 # feature grid
@@ -62,7 +63,7 @@ for _ in range(10):
 # visual inspection
 plot_feature_grid(feature_grid[0:78], processed_flight_tracks.iloc[:78][['Lon', 'Lat']].values)
 plt.show()
-plot_feature_grid(feature_grid[-78:], processed_flight_tracks.iloc[-78:][['Lon', 'Lat']].values)
+plot_feature_grid(feature_grid[-90:], processed_flight_tracks.iloc[-78:][['Lon', 'Lat']].values)
 plt.show()
 print('feature grid checked!')
 
@@ -91,6 +92,7 @@ idx = 51134
 print(feature_grid[idx].shape)
 tmp_dt = processed_flight_tracks.loc[idx, 'Elap_Time']
 print(str(tmp_dt))
+print(processed_flight_tracks.loc[idx, 'wx_fname'])
 tmp_wx_idx = ncwf_wx[2].index([tmp_dt.year, tmp_dt.month, tmp_dt.day, tmp_dt.hour])
 plt.imshow(feature_cubes[idx][:, :, 0], origin='lower')
 bad_poly = plot_daily_wx(ncwf_wx[0][tmp_wx_idx-1:tmp_wx_idx+1], feature_grid = feature_grid[idx])
