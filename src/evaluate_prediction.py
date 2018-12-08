@@ -2,7 +2,7 @@
 # @Author: liuyulin
 # @Date:   2018-10-22 14:31:13
 # @Last Modified by:   liuyulin
-# @Last Modified time: 2018-10-29 11:24:54
+# @Last Modified time: 2018-12-07 16:52:52
 
 import numpy as np
 import pandas as pd
@@ -136,12 +136,21 @@ class evaluate_prediction:
         for i in range(len(ground_truth)):
             n_pnt = min(ground_truth[i].shape[0], predictions[i].shape[0] - self.n_feed)
             # print(n_pnt)
-            _, _, dist = g.inv(ground_truth[i][:n_pnt, 1], ground_truth[i][:n_pnt, 0], predictions[i][self.n_feed:self.n_feed+n_pnt, 1], predictions[i][self.n_feed:self.n_feed+n_pnt, 0])
-            alt_dist = ground_truth[i][:n_pnt, 2] - predictions[i][self.n_feed:self.n_feed+n_pnt, 2]
-            avg_horizontal_err.append(np.sqrt(np.mean((dist/1852)**2))) # in nmi
-            avg_vertical_err.append(np.sqrt(np.mean(alt_dist**2)))
+            _, _, dist = g.inv(ground_truth[i][:n_pnt, 1], 
+                               ground_truth[i][:n_pnt, 0], 
+                               predictions[i][self.n_feed:self.n_feed+n_pnt, 1], 
+                               predictions[i][self.n_feed:self.n_feed+n_pnt, 0])
+
+            alt_dist = 100*(ground_truth[i][:n_pnt, 2] - predictions[i][self.n_feed:self.n_feed+n_pnt, 2]) # ft.
+            
             all_horizontal_err += list(dist/1852)
             all_vertical_err += list(alt_dist)
+
+            avg_horizontal_err.append(np.mean(np.abs((dist/1852)))) # in nmi
+            avg_vertical_err.append(np.mean(np.abs(alt_dist)))
+            # avg_horizontal_err.append(np.sqrt(np.mean((dist/1852)**2))) # in nmi
+            # avg_vertical_err.append(np.sqrt(np.mean(alt_dist**2)))
+            
 
         
         return np.array(avg_horizontal_err), np.array(avg_vertical_err), np.array(all_horizontal_err), np.array(all_vertical_err)
