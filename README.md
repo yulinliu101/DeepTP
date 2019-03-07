@@ -15,6 +15,34 @@ Eprint = {arXiv:1812.11670},
 }
 ```
 
+To run feature engineering:
+
+```
+cd src
+python run_feature_cube_generator.py
+```
+
+To train from scratch:
+
+```
+cd src
+python Run_RNN_model_Lite.py --train_or_predict train --config configs/encoder_decoder_nn_lite.ini
+```
+
+To train from some pretrained models:
+
+```
+cd src
+python Run_RNN_model_Lite.py --train_or_predict train --config configs/encoder_decoder_nn_lite.ini --name PATH/TO/MODEL --train_from_momdel True
+```
+
+To sample trajectories:
+
+```
+cd src
+python Run_RNN_model_Lite.py --train_or_predict predict --config configs/encoder_decoder_nn_lite.ini --name PATH/TO/MODEL
+```
+
 The following are examples of generated flight tracks.
 
 ![Example 1 of generated flight tracks](https://github.com/yulinliu101/DeepTP/blob/master/output_figs/generated_samp1.png)
