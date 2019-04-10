@@ -15,6 +15,10 @@ Eprint = {arXiv:1812.11670},
 }
 ```
 
+Inference framework:
+
+![Inference](https://github.com/yulinliu101/DeepTP/blob/master/output_figs/Framework%20%E2%80%93%20Inference.gif)
+
 To run feature engineering:
 
 ```
