@@ -133,7 +133,7 @@ class DatasetEncoderDecoder:
         return latlon_spd
 
     def load_track_data(self):
-        track_data = pd.read_csv(self.actual_track_datapath, header = 0, usecols = [0, 1, 7, 8, 9, 10, 13, 15, 17, 19], index_col = 0)
+        track_data = pd.read_csv(self.actual_track_datapath, header = 0, index_col = 0)
         # FID, Elap_Time, Lat, Lon, Alt, DT, Speed (nmi/sec), Elap_Time_Diff (sec), course (rad)
 
         # calculate lat long speed
@@ -143,7 +143,7 @@ class DatasetEncoderDecoder:
 
         # merge with flight plans
         FP_track = pd.read_csv(self.flight_plan_datapath)
-        FP_utlize = pd.read_csv(self.flight_plan_utilize_datapath, header = 0, usecols = [19,1])
+        FP_utlize = pd.read_csv(self.flight_plan_utilize_datapath, header = 0)
 
         # subtract departure airport's [lat, lon] from flight plan (FP) track and standardize
         FP_track[['LATITUDE', 'LONGITUDE']] -= np.array([self.dep_lat, self.dep_lon])
