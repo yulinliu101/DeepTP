@@ -116,7 +116,7 @@ class flight_track_feature_generator:
         except:
             wx_alt_dict = {}
             j = 0
-            for lvl in unique_alt:
+            for lvl in wx_unique_alt:
                 wx_alt_dict[lvl] = j
                 j += 1
             with open(self.ncwf_alt_dict_dir, 'wb') as pfile:
