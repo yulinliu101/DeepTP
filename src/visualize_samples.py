@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # @Author: liuyulin
 # @Date:   2018-10-16 16:36:20
-# @Last Modified by:   liuyulin
-# @Last Modified time: 2018-11-02 16:51:18
+# @Last Modified by:   Yulin Liu
+# @Last Modified time: 2019-06-23 21:03:01
 
 from matplotlib.patches import Polygon
 import pyproj
@@ -199,8 +199,9 @@ def plot_fp_act(FP_ID,
                     grbs_common_info_file = grbs_common_info_file,
                     resolution = resolution, 
                     wind_scale = wind_scale)
+    plt.title('Flight %s with flight plan %s'%(plot_track.FID.unique(), FP_ID))
     plt.show()
-    return plot_track, m
+    return plot_track, fig
 
 def plot_wx(m, 
             wind_fname_list, 

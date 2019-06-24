@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # @Author: liuyulin
 # @Date:   2018-10-22 14:31:13
-# @Last Modified by:   liuyulin
-# @Last Modified time: 2018-12-07 16:52:52
+# @Last Modified by:   Yulin Liu
+# @Last Modified time: 2019-06-23 20:44:21
 
 import numpy as np
 import pandas as pd
@@ -85,6 +85,7 @@ class evaluate_prediction:
         return best_seq_idx
 
     def _resample_interpolate_ground_truth(self):
+        # resample ground truth to make it equal time interval as the predictions
         ground_truth = self.act_track_data.loc[self.act_track_data.FID.isin(self.feed_fp.FLT_PLAN_ID.unique())].reset_index(drop = True)
         ground_truth = ground_truth.drop(index = ground_truth.groupby('FID').head(self.n_feed).index)
 
@@ -126,22 +127,27 @@ class evaluate_prediction:
         if beam_search:
             best_seq_idx = self._best_sequence_idx(self.pred_logprobs)
             predictions = predictions[best_seq_idx, ] # shape of [n_seq, n_time, 6|--> lat lon alt cumT latspd lonspd]
-        if resample_and_interpolation:
-            ground_truth = self._resample_interpolate_ground_truth() # list of arrays with shape of [n_time, 3]
+        if ground_truth is not None:
+            self.ground_truth = ground_truth.copy()
+        else:
+            if resample_and_interpolation:
+                self.ground_truth = self._resample_interpolate_ground_truth() # list of arrays with shape of [n_time, 3]
+            else:
+                raise ValueError("No ground truth!")
         
         avg_horizontal_err = []
         avg_vertical_err = []
         all_horizontal_err = []
         all_vertical_err = []
-        for i in range(len(ground_truth)):
-            n_pnt = min(ground_truth[i].shape[0], predictions[i].shape[0] - self.n_feed)
+        for i in range(len(self.ground_truth)):
+            n_pnt = min(self.ground_truth[i].shape[0], predictions[i].shape[0] - self.n_feed - 1)
             # print(n_pnt)
-            _, _, dist = g.inv(ground_truth[i][:n_pnt, 1], 
-                               ground_truth[i][:n_pnt, 0], 
+            _, _, dist = g.inv(self.ground_truth[i][:n_pnt, 1], 
+                               self.ground_truth[i][:n_pnt, 0], 
                                predictions[i][self.n_feed:self.n_feed+n_pnt, 1], 
                                predictions[i][self.n_feed:self.n_feed+n_pnt, 0])
 
-            alt_dist = 100*(ground_truth[i][:n_pnt, 2] - predictions[i][self.n_feed:self.n_feed+n_pnt, 2]) # ft.
+            alt_dist = 100*(self.ground_truth[i][:n_pnt, 2] - predictions[i][self.n_feed:self.n_feed+n_pnt, 2]) # ft.
             
             all_horizontal_err += list(dist/1852)
             all_vertical_err += list(alt_dist)
@@ -150,12 +156,74 @@ class evaluate_prediction:
             avg_vertical_err.append(np.mean(np.abs(alt_dist)))
             # avg_horizontal_err.append(np.sqrt(np.mean((dist/1852)**2))) # in nmi
             # avg_vertical_err.append(np.sqrt(np.mean(alt_dist**2)))
-            
-
         
         return np.array(avg_horizontal_err), np.array(avg_vertical_err), np.array(all_horizontal_err), np.array(all_vertical_err)
 
-    def plot_hist(self):
+    def prediction_coverage(self, 
+                            n_std,
+                            predictions,
+                            prediction_cov,
+                            ground_truth = None,
+                            beam_search = True,
+                            resample_and_interpolation = True):
+        if beam_search:
+            best_seq_idx = self._best_sequence_idx(self.pred_logprobs)
+            predictions = predictions[best_seq_idx, ] # shape of [n_seq, n_time, 6|--> lat lon alt cumT latspd lonspd]
+            predictions_cov = np.sqrt(prediction_cov[best_seq_idx, ]) # shape of [n_seq, n_time - n_feed-1, 5,5|--> lat lon alt latspd lonspd]
+        if ground_truth is not None:
+            self.ground_truth = ground_truth.copy()
+        else:
+            if resample_and_interpolation:
+                self.ground_truth = self._resample_interpolate_ground_truth() # list of arrays with shape of [n_time, 3]
+            else:
+                raise ValueError("No ground truth!")
+        
+        n_horizotal_cover = []
+        n_vertical_cover = []
+        n_full_cover = []
+
+        percentage_horizotal_cover = []
+        percentage_vertical_cover = []
+        percentage_full_cover = []
+
+        total_pts = 0
+        for i in range(len(self.ground_truth)):
+            n_pnt = min(self.ground_truth[i].shape[0], predictions[i].shape[0] - self.n_feed - 1)
+
+            _cond_lat_rhs = (self.ground_truth[i][:n_pnt, 0] <= (predictions[i][self.n_feed:self.n_feed+n_pnt, 0] + predictions_cov[i][:n_pnt, 0, 0] * n_std)) # lat
+            _cond_lat_lhs = (self.ground_truth[i][:n_pnt, 0] >= (predictions[i][self.n_feed:self.n_feed+n_pnt, 0] - predictions_cov[i][:n_pnt, 0, 0] * n_std)) # lat
+            _cond_lon_rhs = (self.ground_truth[i][:n_pnt, 1] <= (predictions[i][self.n_feed:self.n_feed+n_pnt, 1] + predictions_cov[i][:n_pnt, 1, 1] * n_std)) # lon
+            _cond_lon_lhs = (self.ground_truth[i][:n_pnt, 1] >= (predictions[i][self.n_feed:self.n_feed+n_pnt, 1] - predictions_cov[i][:n_pnt, 1, 1] * n_std)) # lon
+            _cond_alt_rhs = (self.ground_truth[i][:n_pnt, 2] <= (predictions[i][self.n_feed:self.n_feed+n_pnt, 2] + predictions_cov[i][:n_pnt, 2, 2] * n_std)) # alt
+            _cond_alt_lhs = (self.ground_truth[i][:n_pnt, 2] >= (predictions[i][self.n_feed:self.n_feed+n_pnt, 2] - predictions_cov[i][:n_pnt, 2, 2] * n_std)) # alt
+
+            _horizontal_cond = (_cond_lat_lhs & _cond_lat_rhs & _cond_lon_lhs & _cond_lon_rhs)
+            _vertical_cond = (_cond_alt_rhs & _cond_alt_lhs)
+            _full_cond = (_horizontal_cond & _vertical_cond)
+            
+            n_horizotal_cover.append(_horizontal_cond.sum())
+            percentage_horizotal_cover.append(_horizontal_cond.sum()/n_pnt)
+
+            n_vertical_cover.append(_vertical_cond.sum())
+            percentage_vertical_cover.append(_vertical_cond.sum()/n_pnt)
+
+            n_full_cover.append(_full_cond.sum())
+            percentage_full_cover.append(_full_cond.sum()/n_pnt)
+
+            total_pts += n_pnt
+        
+        return (np.array(percentage_horizotal_cover), 
+                np.array(percentage_vertical_cover), 
+                np.array(percentage_full_cover), 
+                sum(n_horizotal_cover)/total_pts, 
+                sum(n_vertical_cover)/total_pts,
+                sum(n_full_cover)/total_pts)
+
+    def plot_hist(self, 
+                  all_hor_err,
+                  avg_horizontal_err,
+                  all_alt_err,
+                  avg_vertical_err):
         fig, axs = plt.subplots(2, 2, figsize=(10,6), facecolor='w', edgecolor='k')
         fig.subplots_adjust(wspace = 0.2, hspace = 0.35)
         axs = axs.ravel()
