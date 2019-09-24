@@ -6,7 +6,6 @@
 
 import numpy as np
 import pandas as pd
-import 
 
 def generate_testing_set(actual_track_datapath = '../../DATA/DeepTP/processed_flight_tracks.csv',
                          flight_plan_datapath = '../../DATA/DeepTP/processed_flight_plans.csv',
